@@ -1,0 +1,101 @@
+From c48a78ff823e42f814e330c51df345df38ace3ac Mon Sep 17 00:00:00 2001
+From: Eliad Peller <eliad@wizery.com>
+Date: Sun, 22 Jan 2012 15:12:45 +0200
+Subject: [PATCH 02/10] wl12xx: add inband_claimed (squash)
+
+Signed-off-by: Eliad Peller <eliad@wizery.com>
+---
+ drivers/net/wireless/ti/wlcore/io.c       |   21 +++++++++++++--------
+ drivers/net/wireless/ti/wlcore/sdio.c     |    3 ++-
+ drivers/net/wireless/ti/wlcore/wlcore.h   |    1 +
+ drivers/net/wireless/ti/wlcore/wlcore_i.h |    2 +-
+ 4 files changed, 17 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/net/wireless/ti/wlcore/io.c b/drivers/net/wireless/ti/wlcore/io.c
+index 1975875..1051ee7 100644
+--- a/drivers/net/wireless/ti/wlcore/io.c
++++ b/drivers/net/wireless/ti/wlcore/io.c
+@@ -44,21 +44,26 @@ bool wl1271_set_block_size(struct wl1271 *wl)
+ 
+ void wlcore_disable_interrupts(struct wl1271 *wl)
+ {
+-	if (wl->inband_irq)
++	if (wl->inband_irq) {
+ 		wl->if_ops->free_inband_irq(wl->dev);
+-	else
++		wl->inband_claimed = false;
++	} else
+ 		disable_irq(wl->irq);
+ }
+ EXPORT_SYMBOL_GPL(wlcore_disable_interrupts);
+ 
+ void wlcore_enable_interrupts(struct wl1271 *wl)
+ {
+-	if (wl->inband_irq)
+-		wl->if_ops->request_inband_irq(wl->dev,
+-					       wl12xx_hardirq,
+-					       wl1271_irq,
+-					       wl);
+-	else
++	int ret;
++
++	if (wl->inband_irq) {
++		ret = wl->if_ops->request_inband_irq(wl->dev,
++						     wl12xx_hardirq,
++						     wl1271_irq,
++						     wl);
++		if (!ret)
++			wl->inband_claimed = true;
++	} else
+ 		enable_irq(wl->irq);
+ }
+ EXPORT_SYMBOL_GPL(wlcore_enable_interrupts);
+diff --git a/drivers/net/wireless/ti/wlcore/sdio.c b/drivers/net/wireless/ti/wlcore/sdio.c
+index 807b685..9cd5ee3 100644
+--- a/drivers/net/wireless/ti/wlcore/sdio.c
++++ b/drivers/net/wireless/ti/wlcore/sdio.c
+@@ -219,7 +219,7 @@ static void wl12xx_sdio_interrupt(struct sdio_func *func)
+ 	}
+ }
+ 
+-void wl12xx_sdio_request_irq(struct device *child,
++int wl12xx_sdio_request_irq(struct device *child,
+ 			     irq_handler_t handler,
+ 			     irq_handler_t thread_fn,
+ 			     void *cookie)
+@@ -235,6 +235,7 @@ void wl12xx_sdio_request_irq(struct device *child,
+ 	ret = sdio_claim_irq(func, wl12xx_sdio_interrupt);
+ 	sdio_release_host(func);
+ 	printk("claiming sdio irq (func=%d). ret=%d\n", func->num, ret);
++	return ret;
+ }
+ 
+ static void wl12xx_sdio_free_irq(struct device *child)
+diff --git a/drivers/net/wireless/ti/wlcore/wlcore.h b/drivers/net/wireless/ti/wlcore/wlcore.h
+index 20b523f..642683f 100644
+--- a/drivers/net/wireless/ti/wlcore/wlcore.h
++++ b/drivers/net/wireless/ti/wlcore/wlcore.h
+@@ -149,6 +149,7 @@ struct wl1271 {
+ 
+ 	void (*set_power)(bool enable);
+ 	bool inband_irq;
++	bool inband_claimed;
+ 	int irq;
+ 
+ 	spinlock_t wl_lock;
+diff --git a/drivers/net/wireless/ti/wlcore/wlcore_i.h b/drivers/net/wireless/ti/wlcore/wlcore_i.h
+index a0448ac..2f871cb 100644
+--- a/drivers/net/wireless/ti/wlcore/wlcore_i.h
++++ b/drivers/net/wireless/ti/wlcore/wlcore_i.h
+@@ -208,7 +208,7 @@ struct wl1271_if_operations {
+ 	void (*init)(struct device *child);
+ 	int (*power)(struct device *child, bool enable);
+ 	void (*set_block_size) (struct device *child, unsigned int blksz);
+-	void (*request_inband_irq)(struct device *child,
++	int (*request_inband_irq)(struct device *child,
+ 				   irq_handler_t handler,
+ 				   irq_handler_t thread_fn,
+ 				   void *cookie);
+-- 
+1.7.0.4
+

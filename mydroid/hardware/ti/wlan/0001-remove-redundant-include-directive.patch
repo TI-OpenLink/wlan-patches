@@ -1,0 +1,26 @@
+From 812381daea7276c6feb1da6dba96d2d559448d9f Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Thu, 9 Feb 2012 20:23:08 +0200
+Subject: [PATCH] remove redundant include directive
+
+Change-Id: I4b411004678ccfd2780e9e9d72c7046cae968ccc
+Signed-off-by: Ido Reis <idor@ti.com>
+---
+ mac80211/wpa_supplicant_lib/driver_mac80211_nl.c |    1 -
+ 1 files changed, 0 insertions(+), 1 deletions(-)
+
+diff --git a/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c b/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
+index aeadf57..4c97f88 100644
+--- a/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
++++ b/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
+@@ -30,7 +30,6 @@
+ #include <netlink/msg.h>
+ #include <netlink/attr.h>
+ 
+-#include "wireless_copy.h"
+ #include "common.h"
+ #include "driver.h"
+ #include "eloop.h"
+-- 
+1.7.0.4
+

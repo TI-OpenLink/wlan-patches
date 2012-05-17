@@ -1,0 +1,33 @@
+From 16d0efe5f088f9f76fd826bacc0e68dae091e6d9 Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Sun, 18 Mar 2012 11:13:34 +0200
+Subject: [PATCH 1/2] wpa_supplicant_lib: fix Android.mk to point to correct wpa_s config
+
+Recent upstream changes renamed wpa_s .config to android.config
+Fix the Android.mk accordingly.
+
+hostap commit-id is: 5db498920f689d36516c34673b7fa542d3e28223
+
+Change-Id: I3b221c5a4309722c1be758c5b347fb2d835ed067
+Signed-off-by: Eyal Shapira <eyal@wizery.com>
+Signed-off-by: Ido Reis <idor@ti.com>
+---
+ mac80211/wpa_supplicant_lib/Android.mk |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/mac80211/wpa_supplicant_lib/Android.mk b/mac80211/wpa_supplicant_lib/Android.mk
+index 541d8bd..6dde819 100644
+--- a/mac80211/wpa_supplicant_lib/Android.mk
++++ b/mac80211/wpa_supplicant_lib/Android.mk
+@@ -12,7 +12,7 @@ ifeq ($(WPA_SUPPLICANT_VERSION),VER_0_8_X)
+     WPA_SUPPL_DIR = external/wpa_supplicant_8/wpa_supplicant
+ endif
+ 
+-include $(WPA_SUPPL_DIR)/.config
++include $(WPA_SUPPL_DIR)/android.config
+ 
+ ifneq ($(BOARD_WPA_SUPPLICANT_DRIVER),)
+   CONFIG_DRIVER_$(BOARD_WPA_SUPPLICANT_DRIVER) := y
+-- 
+1.7.0.4
+

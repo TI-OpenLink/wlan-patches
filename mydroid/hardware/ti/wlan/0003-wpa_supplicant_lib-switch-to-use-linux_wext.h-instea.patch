@@ -1,0 +1,51 @@
+From b367c8d5b15f64741460a6abe2ae9f08ce299705 Mon Sep 17 00:00:00 2001
+From: Eyal Shapira <eyal@wizery.com>
+Date: Sun, 18 Mar 2012 11:18:21 +0200
+Subject: [PATCH 2/2] wpa_supplicant_lib: switch to use linux_wext.h instead of wireless_copy.h
+
+The following commit on the hostap repo
+
+commit 545cfc4bf34de70315da75c024602029d7f0a80e
+Author: Jouni Malinen <j@w1.fi>
+Date:   Tue Nov 15 20:03:00 2011 +0200
+
+    WEXT: Use linux/wireless.h instead of wireless_copy.h
+
+breaks the current wpa_supplicant_lib compilation. Fix it.
+
+Change-Id: I14b0493fbe79c40cbfb32995bff9b4861d2954a2
+
+Signed-off-by: Eyal Shapira <eyal@wizery.com>
+---
+ mac80211/wpa_supplicant_lib/driver_mac80211.c    |    2 +-
+ mac80211/wpa_supplicant_lib/driver_mac80211_nl.c |    1 +
+ 2 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/mac80211/wpa_supplicant_lib/driver_mac80211.c b/mac80211/wpa_supplicant_lib/driver_mac80211.c
+index c8d41e0..9ab0ac1 100644
+--- a/mac80211/wpa_supplicant_lib/driver_mac80211.c
++++ b/mac80211/wpa_supplicant_lib/driver_mac80211.c
+@@ -36,7 +36,7 @@
+ 
+ #include "nl80211.h"
+ 
+-#include "wireless_copy.h"
++#include "linux_wext.h"
+ #include "common.h"
+ #include "driver.h"
+ #include "eloop.h"
+diff --git a/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c b/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
+index 8cf4d81..47672f9 100644
+--- a/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
++++ b/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
+@@ -30,6 +30,7 @@
+ #include <netlink/msg.h>
+ #include <netlink/attr.h>
+ 
++#include "linux_wext.h"
+ #include "common.h"
+ #include "driver.h"
+ #include "eloop.h"
+-- 
+1.7.0.4
+
