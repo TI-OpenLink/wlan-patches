@@ -1,0 +1,34 @@
+From 88836d2184fc94a4132375d4658f9e03465a9f31 Mon Sep 17 00:00:00 2001
+From: Eliad Peller <eliad@wizery.com>
+Date: Wed, 2 Nov 2011 18:21:33 +0200
+Subject: [PATCH 11/21] board-4430: set mmc/dat1 wakeup enable
+
+Signed-off-by: Eliad Peller <eliad@wizery.com>
+---
+ arch/arm/mach-omap2/board-4430sdp.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/mach-omap2/board-4430sdp.c b/arch/arm/mach-omap2/board-4430sdp.c
+index 505278c..49e494f 100644
+--- a/arch/arm/mach-omap2/board-4430sdp.c
++++ b/arch/arm/mach-omap2/board-4430sdp.c
+@@ -499,11 +499,14 @@ static void remux_mmc5_dat1(bool clocks_enabled)
+ 	}
+ 
+ 	val = __raw_readl(mux_base + 0x14C) & 0x0000FFFF;
+-	if (clocks_enabled)
++	if (clocks_enabled) {
++		omap_mux_disable_wkup("sdmmc5_dat1");
+ 		val |= (OMAP_MUX_MODE0 | OMAP_PIN_INPUT_PULLUP) << 16;
+-	else
++	} else {
+ 		val |= (OMAP_MUX_MODE3 | OMAP_PIN_INPUT_PULLUP |
+ 			OMAP_PIN_OFF_WAKEUPENABLE) << 16;
++		omap_mux_enable_wkup("sdmmc5_dat1");
++	}
+ 
+ 	__raw_writel(val, mux_base + 0x14C);
+ 
+-- 
+1.7.0.4
+

@@ -1,0 +1,65 @@
+From fb8db751d915d3a45f3367839811e6d81a69e807 Mon Sep 17 00:00:00 2001
+From: Eliad Peller <eliad@wizery.com>
+Date: Sun, 11 Sep 2011 11:19:12 +0300
+Subject: [PATCH 08/21] omap_hsmmc: Handle async inband interrupts between requests
+
+omap_hsmmc_do_irq rejects any interrupts if a request is not in
+progress. This includes asynchronous inband interrupts which are valid
+in this case.
+
+Fix this by handling CIRQ events before clearing any potential spurious
+interrupts.
+
+Signed-off-by: Eliad Peller <eliad@wizery.com>
+---
+ drivers/mmc/host/omap_hsmmc.c |   21 +++++++++++++++------
+ 1 files changed, 15 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/mmc/host/omap_hsmmc.c b/drivers/mmc/host/omap_hsmmc.c
+index 428aecc..555cc15 100644
+--- a/drivers/mmc/host/omap_hsmmc.c
++++ b/drivers/mmc/host/omap_hsmmc.c
+@@ -1158,12 +1158,27 @@ static void omap_hsmmc_do_irq(struct omap_hsmmc_host *host, int status)
+ 	struct mmc_data *data;
+ 	int end_cmd = 0, end_trans = 0;
+ 
++	/* Handle async inband interrupts even if no request is in progress */
++	if (status & CIRQ) {
++		if ((host->mmc->caps & MMC_CAP_ASYNC_SDIO_IRQ) ||
++		    host->mrq == NULL)
++			mmc_signal_sdio_irq(host->mmc);
++		else
++			dev_dbg(mmc_dev(host->mmc), "inband interrupt received"
++				" during data transfer\n");
++	}
++
++	/* Check if there are any interrupts we should handle */
++	if (!(status & INT_EN_MASK))
++		return;
++
+ 	if (!host->req_in_progress) {
+ 		do {
+ 			OMAP_HSMMC_WRITE(host->base, STAT, status);
+ 			/* Flush posted write */
+ 			status = OMAP_HSMMC_READ(host->base, STAT);
+ 		} while (status & INT_EN_MASK);
++
+ 		return;
+ 	}
+ 
+@@ -1236,12 +1251,6 @@ static void omap_hsmmc_do_irq(struct omap_hsmmc_host *host, int status)
+ 			OMAP_HSMMC_READ(host->base, PSTATE));
+ 
+ 	}
+-	if (status & CIRQ) {
+-		if (host->mrq == NULL)
+-			mmc_signal_sdio_irq(host->mmc);
+-		else
+-			dev_dbg(mmc_dev(host->mmc), "inband interrupt received during data transfer\n");
+-	}
+ 
+ 	OMAP_HSMMC_WRITE(host->base, STAT, status);
+ 
+-- 
+1.7.0.4
+
