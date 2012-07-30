@@ -1,0 +1,26 @@
+From 35411ba48ced04991c4a2b6a041b324d400fbc14 Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Wed, 25 Jul 2012 20:19:30 +0300
+Subject: [PATCH 2/2] support wifi direct in blaze
+
+Change-Id: I69372ad0d26b19c10395c8188b4125d34928a0ac
+Signed-off-by: Ido Reis <idor@ti.com>
+---
+ device.mk |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/device.mk b/device.mk
+index fcce720..18f8e59 100644
+--- a/device.mk
++++ b/device.mk
+@@ -60,6 +60,7 @@ PRODUCT_COPY_FILES += \
+ 	frameworks/native/data/etc/android.hardware.usb.accessory.xml:system/etc/permissions/android.hardware.usb.accessory.xml \
+ 	frameworks/native/data/etc/android.hardware.sensor.barometer.xml:system/etc/permissions/android.hardware.sensor.barometer.xml \
+ 	frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml \
++	frameworks/native/data/etc/android.hardware.wifi.direct.xml:system/etc/permissions/android.hardware.wifi.direct.xml \
+ 	device/ti/blaze/android.hardware.bluetooth.xml:system/etc/permissions/android.hardware.bluetooth.xml \
+ 	frameworks/native/data/etc/android.hardware.sensor.proximity.xml:system/etc/permissions/android.hardware.sensor.proximity.xml \
+ 	frameworks/native/data/etc/android.hardware.sensor.accelerometer.xml:system/etc/permissions/android.hardware.sensor.accelerometer.xml \
+-- 
+1.7.9
+

@@ -1,0 +1,27 @@
+From f88a9ba9c048808c14fe1d34f8c0c5e18b60ffeb Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Sun, 18 Mar 2012 11:49:04 +0200
+Subject: [PATCH] wlan: add band settings in Advanced Wi-Fi settings
+
+Change-Id: I577a821a04b1f8a799613a388d07744297dce0a3
+---
+ .../frameworks/base/core/res/res/values/config.xml |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/overlay/frameworks/base/core/res/res/values/config.xml b/overlay/frameworks/base/core/res/res/values/config.xml
+index 9a20db5..f830706 100644
+--- a/overlay/frameworks/base/core/res/res/values/config.xml
++++ b/overlay/frameworks/base/core/res/res/values/config.xml
+@@ -46,6 +46,9 @@
+         <item>"bnep\\d"</item>
+     </string-array>
+ 
++    <!-- Boolean indicating whether the wifi chipset has dual frequency band support -->
++    <bool translatable="false" name="config_wifi_dual_band_support">true</bool>
++
+     <!-- Array of ConnectivityManager.TYPE_xxxx values allowable for tethering -->
+     <!-- Common options are [1, 4] for TYPE_WIFI and TYPE_MOBILE_DUN or
+     <!== [0,1,5,7] for TYPE_MOBILE, TYPE_WIFI, TYPE_MOBILE_HIPRI and TYPE_BLUETOOTH -->
+-- 
+1.7.0.4
+

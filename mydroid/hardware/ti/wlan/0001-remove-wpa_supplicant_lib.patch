@@ -1,0 +1,4832 @@
+From add9425567d5294a97e4f2076edee0aed75e4a9f Mon Sep 17 00:00:00 2001
+From: Arik Nemtsov <arik@wizery.com>
+Date: Sun, 22 Jul 2012 13:54:48 +0300
+Subject: [PATCH] remove wpa_supplicant_lib
+
+the code is now inline in the supplicant
+
+Change-Id: I9a073fd31cd066017a994880b8e249317f7d7257
+Signed-off-by: Arik Nemtsov <arik@wizery.com>
+---
+ mac80211/wpa_supplicant_lib/Android.mk           |   73 -
+ mac80211/wpa_supplicant_lib/driver_mac80211.c    | 2179 ----------------------
+ mac80211/wpa_supplicant_lib/driver_mac80211_nl.c |  516 -----
+ mac80211/wpa_supplicant_lib/driver_nl80211.h     |  196 --
+ mac80211/wpa_supplicant_lib/nl80211.h            | 1813 ------------------
+ 5 files changed, 4777 deletions(-)
+ delete mode 100644 mac80211/wpa_supplicant_lib/Android.mk
+ delete mode 100644 mac80211/wpa_supplicant_lib/driver_mac80211.c
+ delete mode 100644 mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
+ delete mode 100644 mac80211/wpa_supplicant_lib/driver_nl80211.h
+ delete mode 100644 mac80211/wpa_supplicant_lib/nl80211.h
+
+diff --git a/mac80211/wpa_supplicant_lib/Android.mk b/mac80211/wpa_supplicant_lib/Android.mk
+deleted file mode 100644
+index 7fd448e..0000000
+--- a/mac80211/wpa_supplicant_lib/Android.mk
++++ /dev/null
+@@ -1,73 +0,0 @@
+-LOCAL_PATH := $(call my-dir)
+-
+-ifeq ($(TARGET_SIMULATOR),true)
+-  $(error This makefile must not be included when building the simulator)
+-endif
+-
+-ifeq ($(WPA_SUPPLICANT_VERSION),VER_0_6_X)
+-    WPA_SUPPL_DIR = external/wpa_supplicant_6/wpa_supplicant
+-endif
+-
+-ifeq ($(WPA_SUPPLICANT_VERSION),VER_0_8_X)
+-    WPA_SUPPL_DIR = external/wpa_supplicant_8/wpa_supplicant
+-endif
+-
+-ifneq ($(wildcard $(WPA_SUPPL_DIR)/.config),)
+-    include $(WPA_SUPPL_DIR)/.config
+-endif
+-ifneq ($(wildcard $(WPA_SUPPL_DIR)/android.config),)
+-    include $(WPA_SUPPL_DIR)/android.config
+-endif
+-
+-ifneq ($(BOARD_WPA_SUPPLICANT_DRIVER),)
+-  CONFIG_DRIVER_$(BOARD_WPA_SUPPLICANT_DRIVER) := y
+-endif
+-
+-L_CFLAGS = -DCONFIG_DRIVER_CUSTOM -DWPA_SUPPLICANT_$(WPA_SUPPLICANT_VERSION)
+-L_SRC :=
+-
+-ifdef CONFIG_NO_STDOUT_DEBUG
+-L_CFLAGS += -DCONFIG_NO_STDOUT_DEBUG
+-endif
+-
+-ifdef CONFIG_DEBUG_FILE
+-L_CFLAGS += -DCONFIG_DEBUG_FILE
+-endif
+-
+-ifdef CONFIG_ANDROID_LOG
+-L_CFLAGS += -DCONFIG_ANDROID_LOG
+-endif
+-
+-ifdef CONFIG_IEEE8021X_EAPOL
+-L_CFLAGS += -DIEEE8021X_EAPOL
+-endif
+-
+-ifdef CONFIG_WPS
+-L_CFLAGS += -DCONFIG_WPS
+-endif
+-
+-ifdef CONFIG_DRIVER_WEXT
+-L_SRC += driver_mac80211.c
+-endif
+-
+-ifdef CONFIG_DRIVER_NL80211
+-L_SRC += driver_mac80211_nl.c
+-endif
+-
+-INCLUDES = $(WPA_SUPPL_DIR) \
+-    $(WPA_SUPPL_DIR)/src \
+-    $(WPA_SUPPL_DIR)/src/common \
+-    $(WPA_SUPPL_DIR)/src/drivers \
+-    $(WPA_SUPPL_DIR)/src/l2_packet \
+-    $(WPA_SUPPL_DIR)/src/utils \
+-    $(WPA_SUPPL_DIR)/src/wps \
+-    external/libnl-headers
+-
+-include $(CLEAR_VARS)
+-LOCAL_MODULE := lib_driver_cmd_wl12xx
+-LOCAL_MODULE_TAGS := eng
+-LOCAL_SHARED_LIBRARIES := libc libcutils
+-LOCAL_CFLAGS := $(L_CFLAGS)
+-LOCAL_SRC_FILES := $(L_SRC)
+-LOCAL_C_INCLUDES := $(INCLUDES)
+-include $(BUILD_STATIC_LIBRARY)
+diff --git a/mac80211/wpa_supplicant_lib/driver_mac80211.c b/mac80211/wpa_supplicant_lib/driver_mac80211.c
+deleted file mode 100644
+index c8d41e0..0000000
+--- a/mac80211/wpa_supplicant_lib/driver_mac80211.c
++++ /dev/null
+@@ -1,2179 +0,0 @@
+-/*
+- * WPA Supplicant - driver interaction with generic Linux Wireless Extensions
+- * Copyright (c) 2003-2007, Jouni Malinen <j@w1.fi>
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License version 2 as
+- * published by the Free Software Foundation.
+- *
+- * Alternatively, this software may be distributed under the terms of BSD
+- * license.
+- *
+- * See README and COPYING for more details.
+- *
+- * This file implements a driver interface for the Linux Wireless Extensions.
+- * When used with WE-18 or newer, this interface can be used as-is with number
+- * of drivers. In addition to this, some of the common functions in this file
+- * can be used by other driver interface implementations that use generic WE
+- * ioctls, but require private ioctls for some of the functionality.
+- */
+-
+-#include "includes.h"
+-#include <sys/ioctl.h>
+-#include <net/if_arp.h>
+-#include <net/if.h>
+-#include <sys/stat.h>
+-#include <fcntl.h>
+-#include <sys/types.h>
+-#include <sys/wait.h>
+-#include <cutils/properties.h>
+-
+-#include <netlink/genl/genl.h>
+-#include <netlink/genl/family.h>
+-#include <netlink/genl/ctrl.h>
+-#include <netlink/msg.h>
+-#include <netlink/attr.h>
+-
+-#include "nl80211.h"
+-
+-#include "wireless_copy.h"
+-#include "common.h"
+-#include "driver.h"
+-#include "eloop.h"
+-#include "driver_wext.h"
+-#include "ieee802_11_defs.h"
+-#include "wpa_common.h"
+-#include "wpa_ctrl.h"
+-#include "wpa_supplicant_i.h"
+-#include "config_ssid.h"
+-#include "wpa_debug.h"
+-
+-
+-static int wpa_driver_wext_flush_pmkid(void *priv);
+-static int wpa_driver_wext_get_range(void *priv);
+-static void wpa_driver_wext_finish_drv_init(struct wpa_driver_wext_data *drv);
+-static void wpa_driver_wext_disconnect(struct wpa_driver_wext_data *drv);
+-
+-
+-static int wpa_driver_wext_send_oper_ifla(struct wpa_driver_wext_data *drv,
+-                      int linkmode, int operstate)
+-{
+-    struct {
+-        struct nlmsghdr hdr;
+-        struct ifinfomsg ifinfo;
+-        char opts[16];
+-    } req;
+-    struct rtattr *rta;
+-    static int nl_seq;
+-    ssize_t ret;
+-
+-    os_memset(&req, 0, sizeof(req));
+-
+-    req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+-    req.hdr.nlmsg_type = RTM_SETLINK;
+-    req.hdr.nlmsg_flags = NLM_F_REQUEST;
+-    req.hdr.nlmsg_seq = ++nl_seq;
+-    req.hdr.nlmsg_pid = 0;
+-
+-    req.ifinfo.ifi_family = AF_UNSPEC;
+-    req.ifinfo.ifi_type = 0;
+-    req.ifinfo.ifi_index = drv->ifindex;
+-    req.ifinfo.ifi_flags = 0;
+-    req.ifinfo.ifi_change = 0;
+-
+-    if (linkmode != -1) {
+-        rta = aliasing_hide_typecast(
+-            ((char *) &req + NLMSG_ALIGN(req.hdr.nlmsg_len)),
+-            struct rtattr);
+-        rta->rta_type = IFLA_LINKMODE;
+-        rta->rta_len = RTA_LENGTH(sizeof(char));
+-        *((char *) RTA_DATA(rta)) = linkmode;
+-        req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) +
+-            RTA_LENGTH(sizeof(char));
+-    }
+-    if (operstate != -1) {
+-        rta = (struct rtattr *)
+-            ((char *) &req + NLMSG_ALIGN(req.hdr.nlmsg_len));
+-        rta->rta_type = IFLA_OPERSTATE;
+-        rta->rta_len = RTA_LENGTH(sizeof(char));
+-        *((char *) RTA_DATA(rta)) = operstate;
+-        req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) +
+-            RTA_LENGTH(sizeof(char));
+-    }
+-
+-    wpa_printf(MSG_DEBUG, "WEXT: Operstate: linkmode=%d, operstate=%d",
+-           linkmode, operstate);
+-
+-    ret = send(drv->ioctl_sock, &req, req.hdr.nlmsg_len, 0);
+-    if (ret < 0) {
+-        wpa_printf(MSG_DEBUG, "WEXT: Sending operstate IFLA failed: "
+-               "%s (assume operstate is not supported)",
+-               strerror(errno));
+-    }
+-
+-    return ret < 0 ? -1 : 0;
+-}
+-
+-
+-static void
+-wpa_driver_wext_event_wireless_custom(void *ctx, char *custom)
+-{
+-    union wpa_event_data data;
+-
+-    wpa_printf(MSG_MSGDUMP, "WEXT: Custom wireless event: '%s'",
+-           custom);
+-
+-    os_memset(&data, 0, sizeof(data));
+-    /* Host AP driver */
+-    if (os_strncmp(custom, "MLME-MICHAELMICFAILURE.indication", 33) == 0) {
+-        data.michael_mic_failure.unicast =
+-            os_strstr(custom, " unicast ") != NULL;
+-        /* TODO: parse parameters(?) */
+-        wpa_supplicant_event(ctx, EVENT_MICHAEL_MIC_FAILURE, &data);
+-    } else if (os_strncmp(custom, "ASSOCINFO(ReqIEs=", 17) == 0) {
+-        char *spos;
+-        int bytes;
+-
+-        spos = custom + 17;
+-
+-        bytes = strspn(spos, "0123456789abcdefABCDEF");
+-        if (!bytes || (bytes & 1)) {
+-            return;
+-        }
+-        bytes /= 2;
+-
+-        data.assoc_info.req_ies = os_malloc(bytes);
+-        if (data.assoc_info.req_ies == NULL) {
+-            return;
+-        }
+-        data.assoc_info.req_ies_len = bytes;
+-        hexstr2bin(spos, data.assoc_info.req_ies, bytes);
+-
+-        spos += bytes * 2;
+-
+-        data.assoc_info.resp_ies = NULL;
+-        data.assoc_info.resp_ies_len = 0;
+-
+-        if (os_strncmp(spos, " RespIEs=", 9) == 0) {
+-            spos += 9;
+-
+-            bytes = strspn(spos, "0123456789abcdefABCDEF");
+-            if (!bytes || (bytes & 1)) {
+-                goto done;
+-            }
+-            bytes /= 2;
+-
+-            data.assoc_info.resp_ies = os_malloc(bytes);
+-            if (data.assoc_info.resp_ies == NULL) {
+-                goto done;
+-            }
+-
+-            data.assoc_info.resp_ies_len = bytes;
+-            hexstr2bin(spos, data.assoc_info.resp_ies, bytes);
+-        }
+-
+-        wpa_supplicant_event(ctx, EVENT_ASSOCINFO, &data);
+-
+-    done:
+-        os_free(data.assoc_info.resp_ies);
+-        os_free(data.assoc_info.req_ies);
+-#ifdef CONFIG_PEERKEY
+-    } else if (os_strncmp(custom, "STKSTART.request=", 17) == 0) {
+-        if (hwaddr_aton(custom + 17, data.stkstart.peer)) {
+-            wpa_printf(MSG_DEBUG, "WEXT: unrecognized "
+-                   "STKSTART.request '%s'", custom + 17);
+-            return;
+-        }
+-        wpa_supplicant_event(ctx, EVENT_STKSTART, &data);
+-#endif /* CONFIG_PEERKEY */
+-#ifdef ANDROID
+-    } else if (os_strncmp(custom, "STOP", 4) == 0) {
+-        wpa_msg(ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STOPPED");
+-    } else if (os_strncmp(custom, "START", 5) == 0) {
+-        wpa_msg(ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STARTED");
+-    } else if (os_strncmp(custom, "HANG", 4) == 0) {
+-        wpa_msg(ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
+-#endif /* ANDROID */
+-    }
+-}
+-
+-
+-static int wpa_driver_wext_event_wireless_michaelmicfailure(
+-    void *ctx, const char *ev, size_t len)
+-{
+-    const struct iw_michaelmicfailure *mic;
+-    union wpa_event_data data;
+-
+-    if (len < sizeof(*mic)) {
+-        return -1;
+-    }
+-
+-    mic = (const struct iw_michaelmicfailure *) ev;
+-
+-    wpa_printf(MSG_DEBUG, "Michael MIC failure wireless event: "
+-           "flags=0x%x src_addr=" MACSTR, mic->flags,
+-           MAC2STR(mic->src_addr.sa_data));
+-
+-    os_memset(&data, 0, sizeof(data));
+-    data.michael_mic_failure.unicast = !(mic->flags & IW_MICFAILURE_GROUP);
+-    wpa_supplicant_event(ctx, EVENT_MICHAEL_MIC_FAILURE, &data);
+-
+-    return 0;
+-}
+-
+-
+-static int wpa_driver_wext_event_wireless_pmkidcand(
+-    struct wpa_driver_wext_data *drv, const char *ev, size_t len)
+-{
+-    const struct iw_pmkid_cand *cand;
+-    union wpa_event_data data;
+-    const u8 *addr;
+-
+-    if (len < sizeof(*cand)) {
+-        return -1;
+-    }
+-
+-    cand = (const struct iw_pmkid_cand *) ev;
+-    addr = (const u8 *) cand->bssid.sa_data;
+-
+-    wpa_printf(MSG_DEBUG, "PMKID candidate wireless event: "
+-           "flags=0x%x index=%d bssid=" MACSTR, cand->flags,
+-           cand->index, MAC2STR(addr));
+-
+-    os_memset(&data, 0, sizeof(data));
+-    os_memcpy(data.pmkid_candidate.bssid, addr, ETH_ALEN);
+-    data.pmkid_candidate.index = cand->index;
+-    data.pmkid_candidate.preauth = cand->flags & IW_PMKID_CAND_PREAUTH;
+-    wpa_supplicant_event(drv->ctx, EVENT_PMKID_CANDIDATE, &data);
+-
+-    return 0;
+-}
+-
+-
+-static int wpa_driver_wext_event_wireless_assocreqie(
+-    struct wpa_driver_wext_data *drv, const char *ev, int len)
+-{
+-    if (len < 0) {
+-        return -1;
+-    }
+-
+-    wpa_hexdump(MSG_DEBUG, "AssocReq IE wireless event", (const u8 *) ev,
+-            len);
+-    os_free(drv->assoc_req_ies);
+-    drv->assoc_req_ies = os_malloc(len);
+-    if (drv->assoc_req_ies == NULL) {
+-        drv->assoc_req_ies_len = 0;
+-        return -1;
+-    }
+-    os_memcpy(drv->assoc_req_ies, ev, len);
+-    drv->assoc_req_ies_len = len;
+-
+-    return 0;
+-}
+-
+-
+-static int wpa_driver_wext_event_wireless_assocrespie(
+-    struct wpa_driver_wext_data *drv, const char *ev, int len)
+-{
+-    if (len < 0) {
+-        return -1;
+-    }
+-
+-    wpa_hexdump(MSG_DEBUG, "AssocResp IE wireless event", (const u8 *) ev,
+-            len);
+-    os_free(drv->assoc_resp_ies);
+-    drv->assoc_resp_ies = os_malloc(len);
+-    if (drv->assoc_resp_ies == NULL) {
+-        drv->assoc_resp_ies_len = 0;
+-        return -1;
+-    }
+-    os_memcpy(drv->assoc_resp_ies, ev, len);
+-    drv->assoc_resp_ies_len = len;
+-
+-    return 0;
+-}
+-
+-
+-static void wpa_driver_wext_event_assoc_ies(struct wpa_driver_wext_data *drv)
+-{
+-    union wpa_event_data data;
+-
+-    if (drv->assoc_req_ies == NULL && drv->assoc_resp_ies == NULL) {
+-        return;
+-    }
+-
+-    os_memset(&data, 0, sizeof(data));
+-    if (drv->assoc_req_ies) {
+-        data.assoc_info.req_ies = drv->assoc_req_ies;
+-        drv->assoc_req_ies = NULL;
+-        data.assoc_info.req_ies_len = drv->assoc_req_ies_len;
+-    }
+-    if (drv->assoc_resp_ies) {
+-        data.assoc_info.resp_ies = drv->assoc_resp_ies;
+-        drv->assoc_resp_ies = NULL;
+-        data.assoc_info.resp_ies_len = drv->assoc_resp_ies_len;
+-    }
+-
+-    wpa_supplicant_event(drv->ctx, EVENT_ASSOCINFO, &data);
+-
+-    os_free(data.assoc_info.req_ies);
+-    os_free(data.assoc_info.resp_ies);
+-}
+-
+-
+-static void wpa_driver_wext_event_wireless(struct wpa_driver_wext_data *drv,
+-                       void *ctx, char *data, int len)
+-{
+-    struct iw_event iwe_buf, *iwe = &iwe_buf;
+-    char *pos, *end, *custom, *buf;
+-
+-    pos = data;
+-    end = data + len;
+-
+-    while (pos + IW_EV_LCP_LEN <= end) {
+-        /* Event data may be unaligned, so make a local, aligned copy
+-         * before processing. */
+-        os_memcpy(&iwe_buf, pos, IW_EV_LCP_LEN);
+-        wpa_printf(MSG_DEBUG, "Wireless event: cmd=0x%x len=%d",
+-               iwe->cmd, iwe->len);
+-        if (iwe->len <= IW_EV_LCP_LEN) {
+-            return;
+-        }
+-
+-        custom = pos + IW_EV_POINT_LEN;
+-        if (drv->we_version_compiled > 18 &&
+-            (iwe->cmd == IWEVMICHAELMICFAILURE ||
+-             iwe->cmd == IWEVCUSTOM ||
+-             iwe->cmd == IWEVASSOCREQIE ||
+-             iwe->cmd == IWEVASSOCRESPIE ||
+-             iwe->cmd == IWEVPMKIDCAND)) {
+-            /* WE-19 removed the pointer from struct iw_point */
+-            char *dpos = (char *) &iwe_buf.u.data.length;
+-            int dlen = dpos - (char *) &iwe_buf;
+-            os_memcpy(dpos, pos + IW_EV_LCP_LEN,
+-                  sizeof(struct iw_event) - dlen);
+-        } else {
+-            os_memcpy(&iwe_buf, pos, sizeof(struct iw_event));
+-            custom += IW_EV_POINT_OFF;
+-        }
+-
+-        switch (iwe->cmd) {
+-        case SIOCGIWAP:
+-            wpa_printf(MSG_DEBUG, "Wireless event: new AP: "
+-                   MACSTR,
+-                   MAC2STR((u8 *) iwe->u.ap_addr.sa_data));
+-            if (is_zero_ether_addr(
+-                    (const u8 *) iwe->u.ap_addr.sa_data) ||
+-                os_memcmp(iwe->u.ap_addr.sa_data,
+-                      "\x44\x44\x44\x44\x44\x44", ETH_ALEN) ==
+-                0) {
+-                os_free(drv->assoc_req_ies);
+-                drv->assoc_req_ies = NULL;
+-                os_free(drv->assoc_resp_ies);
+-                drv->assoc_resp_ies = NULL;
+-#ifdef ANDROID
+-                if (!drv->skip_disconnect) {
+-                    drv->skip_disconnect = 1;
+-#endif
+-                    wpa_supplicant_event(ctx, EVENT_DISASSOC,
+-                             NULL);
+-#ifdef ANDROID
+-                    wpa_driver_wext_disconnect(drv);
+-                }
+-#endif
+-
+-            } else {
+-#ifdef ANDROID
+-                drv->skip_disconnect = 0;
+-#endif
+-                wpa_driver_wext_event_assoc_ies(drv);
+-                wpa_supplicant_event(ctx, EVENT_ASSOC, NULL);
+-            }
+-            break;
+-        case IWEVMICHAELMICFAILURE:
+-            if (custom + iwe->u.data.length > end) {
+-                wpa_printf(MSG_DEBUG, "WEXT: Invalid "
+-                       "IWEVMICHAELMICFAILURE length");
+-                return;
+-            }
+-            wpa_driver_wext_event_wireless_michaelmicfailure(
+-                ctx, custom, iwe->u.data.length);
+-            break;
+-        case IWEVCUSTOM:
+-            if (custom + iwe->u.data.length > end) {
+-                wpa_printf(MSG_DEBUG, "WEXT: Invalid "
+-                       "IWEVCUSTOM length");
+-                return;
+-            }
+-            buf = os_malloc(iwe->u.data.length + 1);
+-            if (buf == NULL) {
+-                return;
+-            }
+-            os_memcpy(buf, custom, iwe->u.data.length);
+-            buf[iwe->u.data.length] = '\0';
+-            wpa_driver_wext_event_wireless_custom(ctx, buf);
+-            os_free(buf);
+-            break;
+-        case SIOCGIWSCAN:
+-            drv->scan_complete_events = 1;
+-            eloop_cancel_timeout(wpa_driver_wext_scan_timeout,
+-                         drv, ctx);
+-            wpa_supplicant_event(ctx, EVENT_SCAN_RESULTS, NULL);
+-            break;
+-        case IWEVASSOCREQIE:
+-            if (custom + iwe->u.data.length > end) {
+-                wpa_printf(MSG_DEBUG, "WEXT: Invalid "
+-                       "IWEVASSOCREQIE length");
+-                return;
+-            }
+-            wpa_driver_wext_event_wireless_assocreqie(
+-                drv, custom, iwe->u.data.length);
+-            break;
+-        case IWEVASSOCRESPIE:
+-            if (custom + iwe->u.data.length > end) {
+-                wpa_printf(MSG_DEBUG, "WEXT: Invalid "
+-                       "IWEVASSOCRESPIE length");
+-                return;
+-            }
+-            wpa_driver_wext_event_wireless_assocrespie(
+-                drv, custom, iwe->u.data.length);
+-            break;
+-        case IWEVPMKIDCAND:
+-            if (custom + iwe->u.data.length > end) {
+-                wpa_printf(MSG_DEBUG, "WEXT: Invalid "
+-                       "IWEVPMKIDCAND length");
+-                return;
+-            }
+-            wpa_driver_wext_event_wireless_pmkidcand(
+-                drv, custom, iwe->u.data.length);
+-            break;
+-        }
+-
+-        pos += iwe->len;
+-    }
+-}
+-
+-
+-static void wpa_driver_wext_event_link(struct wpa_driver_wext_data *drv,
+-                       void *ctx, char *buf, size_t len,
+-                       int del)
+-{
+-    union wpa_event_data event;
+-
+-    os_memset(&event, 0, sizeof(event));
+-    if (len > sizeof(event.interface_status.ifname)) {
+-        len = sizeof(event.interface_status.ifname) - 1;
+-    }
+-    os_memcpy(event.interface_status.ifname, buf, len);
+-    event.interface_status.ievent = del ? EVENT_INTERFACE_REMOVED :
+-        EVENT_INTERFACE_ADDED;
+-
+-    wpa_printf(MSG_DEBUG, "RTM_%sLINK, IFLA_IFNAME: Interface '%s' %s",
+-           del ? "DEL" : "NEW",
+-           event.interface_status.ifname,
+-           del ? "removed" : "added");
+-
+-    if (os_strcmp(drv->ifname, event.interface_status.ifname) == 0) {
+-        if (del) {
+-            drv->if_removed = 1;
+-        } else {
+-            drv->if_removed = 0;
+-        }
+-    }
+-
+-    wpa_supplicant_event(ctx, EVENT_INTERFACE_STATUS, &event);
+-}
+-
+-
+-static int wpa_driver_wext_own_ifname(struct wpa_driver_wext_data *drv,
+-                      struct nlmsghdr *h)
+-{
+-    struct ifinfomsg *ifi;
+-    int attrlen, nlmsg_len, rta_len;
+-    struct rtattr *attr;
+-
+-    ifi = NLMSG_DATA(h);
+-
+-    nlmsg_len = NLMSG_ALIGN(sizeof(struct ifinfomsg));
+-
+-    attrlen = h->nlmsg_len - nlmsg_len;
+-    if (attrlen < 0) {
+-        return 0;
+-    }
+-
+-    attr = (struct rtattr *) (((char *) ifi) + nlmsg_len);
+-
+-    rta_len = RTA_ALIGN(sizeof(struct rtattr));
+-    while (RTA_OK(attr, attrlen)) {
+-        if (attr->rta_type == IFLA_IFNAME) {
+-            if (os_strcmp(((char *) attr) + rta_len, drv->ifname)
+-                == 0) {
+-                return 1;
+-            } else {
+-                break;
+-            }
+-        }
+-        attr = RTA_NEXT(attr, attrlen);
+-    }
+-
+-    return 0;
+-}
+-
+-
+-static int wpa_driver_wext_own_ifindex(struct wpa_driver_wext_data *drv,
+-                       int ifindex, struct nlmsghdr *h)
+-{
+-    if (drv->ifindex == ifindex || drv->ifindex2 == ifindex) {
+-        return 1;
+-    }
+-
+-    if (drv->if_removed && wpa_driver_wext_own_ifname(drv, h)) {
+-        drv->ifindex = if_nametoindex(drv->ifname);
+-        wpa_printf(MSG_DEBUG, "WEXT: Update ifindex for a removed "
+-               "interface");
+-        wpa_driver_wext_finish_drv_init(drv);
+-        return 1;
+-    }
+-
+-    return 0;
+-}
+-
+-
+-static void wpa_driver_wext_event_rtm_newlink(struct wpa_driver_wext_data *drv,
+-                          void *ctx, struct nlmsghdr *h,
+-                          size_t len)
+-{
+-    struct ifinfomsg *ifi;
+-    int attrlen, nlmsg_len, rta_len;
+-    struct rtattr * attr;
+-
+-    if (len < sizeof(*ifi)) {
+-        return;
+-    }
+-
+-    ifi = NLMSG_DATA(h);
+-
+-    if (!wpa_driver_wext_own_ifindex(drv, ifi->ifi_index, h)) {
+-        wpa_printf(MSG_DEBUG, "Ignore event for foreign ifindex %d",
+-               ifi->ifi_index);
+-        return;
+-    }
+-
+-    wpa_printf(MSG_DEBUG, "RTM_NEWLINK: operstate=%d ifi_flags=0x%x "
+-           "(%s%s%s%s)",
+-           drv->operstate, ifi->ifi_flags,
+-           (ifi->ifi_flags & IFF_UP) ? "[UP]" : "",
+-           (ifi->ifi_flags & IFF_RUNNING) ? "[RUNNING]" : "",
+-           (ifi->ifi_flags & IFF_LOWER_UP) ? "[LOWER_UP]" : "",
+-           (ifi->ifi_flags & IFF_DORMANT) ? "[DORMANT]" : "");
+-    /*
+-     * Some drivers send the association event before the operup event--in
+-     * this case, lifting operstate in wpa_driver_wext_set_operstate()
+-     * fails. This will hit us when wpa_supplicant does not need to do
+-     * IEEE 802.1X authentication
+-     */
+-    if (drv->operstate == 1 &&
+-        (ifi->ifi_flags & (IFF_LOWER_UP | IFF_DORMANT)) == IFF_LOWER_UP &&
+-        !(ifi->ifi_flags & IFF_RUNNING)) {
+-        wpa_driver_wext_send_oper_ifla(drv, -1, IF_OPER_UP);
+-    }
+-
+-    nlmsg_len = NLMSG_ALIGN(sizeof(struct ifinfomsg));
+-
+-    attrlen = h->nlmsg_len - nlmsg_len;
+-    if (attrlen < 0) {
+-        return;
+-    }
+-
+-    attr = (struct rtattr *) (((char *) ifi) + nlmsg_len);
+-
+-    rta_len = RTA_ALIGN(sizeof(struct rtattr));
+-    while (RTA_OK(attr, attrlen)) {
+-        if (attr->rta_type == IFLA_WIRELESS) {
+-            wpa_driver_wext_event_wireless(
+-                drv, ctx, ((char *) attr) + rta_len,
+-                attr->rta_len - rta_len);
+-        } else if (attr->rta_type == IFLA_IFNAME) {
+-            wpa_driver_wext_event_link(drv, ctx,
+-                           ((char *) attr) + rta_len,
+-                           attr->rta_len - rta_len, 0);
+-        }
+-        attr = RTA_NEXT(attr, attrlen);
+-    }
+-}
+-
+-
+-static void wpa_driver_wext_event_rtm_dellink(struct wpa_driver_wext_data *drv,
+-                          void *ctx, struct nlmsghdr *h,
+-                          size_t len)
+-{
+-    struct ifinfomsg *ifi;
+-    int attrlen, nlmsg_len, rta_len;
+-    struct rtattr * attr;
+-
+-    if (len < sizeof(*ifi)) {
+-        return;
+-    }
+-
+-    ifi = NLMSG_DATA(h);
+-
+-    nlmsg_len = NLMSG_ALIGN(sizeof(struct ifinfomsg));
+-
+-    attrlen = h->nlmsg_len - nlmsg_len;
+-    if (attrlen < 0) {
+-        return;
+-    }
+-
+-    attr = (struct rtattr *) (((char *) ifi) + nlmsg_len);
+-
+-    rta_len = RTA_ALIGN(sizeof(struct rtattr));
+-    while (RTA_OK(attr, attrlen)) {
+-        if (attr->rta_type == IFLA_IFNAME) {
+-            wpa_driver_wext_event_link(drv,  ctx,
+-                           ((char *) attr) + rta_len,
+-                           attr->rta_len - rta_len, 1);
+-        }
+-        attr = RTA_NEXT(attr, attrlen);
+-    }
+-}
+-
+-
+-static void wpa_driver_wext_event_receive(int sock, void *eloop_ctx,
+-                      void *sock_ctx)
+-{
+-    char buf[8192];
+-    int left;
+-    struct sockaddr_nl from;
+-    socklen_t fromlen;
+-    struct nlmsghdr *h;
+-    int max_events = 10;
+-
+-try_again:
+-    fromlen = sizeof(from);
+-    left = recvfrom(sock, buf, sizeof(buf), MSG_DONTWAIT,
+-            (struct sockaddr *) &from, &fromlen);
+-    if (left < 0) {
+-        if (errno != EINTR && errno != EAGAIN) {
+-            wpa_printf(MSG_ERROR, "%s: recvfrom(netlink): %d", __func__, errno);        }
+-        return;
+-    }
+-
+-    h = (struct nlmsghdr *) buf;
+-    while (left >= (int) sizeof(*h)) {
+-        int len, plen;
+-
+-        len = h->nlmsg_len;
+-        plen = len - sizeof(*h);
+-        if (len > left || plen < 0) {
+-            wpa_printf(MSG_DEBUG, "Malformed netlink message: "
+-                   "len=%d left=%d plen=%d",
+-                   len, left, plen);
+-            break;
+-        }
+-
+-        switch (h->nlmsg_type) {
+-        case RTM_NEWLINK:
+-            wpa_driver_wext_event_rtm_newlink(eloop_ctx, sock_ctx,
+-                              h, plen);
+-            break;
+-        case RTM_DELLINK:
+-            wpa_driver_wext_event_rtm_dellink(eloop_ctx, sock_ctx,
+-                              h, plen);
+-            break;
+-        }
+-
+-        len = NLMSG_ALIGN(len);
+-        left -= len;
+-        h = (struct nlmsghdr *) ((char *) h + len);
+-    }
+-
+-    if (left > 0) {
+-        wpa_printf(MSG_DEBUG, "%d extra bytes in the end of netlink "
+-               "message", left);
+-    }
+-
+-    if (--max_events > 0) {
+-        /*
+-         * Try to receive all events in one eloop call in order to
+-         * limit race condition on cases where AssocInfo event, Assoc
+-         * event, and EAPOL frames are received more or less at the
+-         * same time. We want to process the event messages first
+-         * before starting EAPOL processing.
+-         */
+-        goto try_again;
+-    }
+-}
+-
+-
+-static int wpa_driver_wext_get_ifflags_ifname(struct wpa_driver_wext_data *drv,
+-                          const char *ifname, int *flags)
+-{
+-    struct ifreq ifr;
+-
+-    os_memset(&ifr, 0, sizeof(ifr));
+-    os_strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
+-    if (ioctl(drv->ioctl_sock, SIOCGIFFLAGS, (caddr_t) &ifr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCGIFFLAGS]");
+-        return -1;
+-    }
+-    *flags = ifr.ifr_flags & 0xffff;
+-    return 0;
+-}
+-
+-
+-static void wpa_driver_wext_finish_drv_init(struct wpa_driver_wext_data *drv)
+-{
+-    int flags;
+-
+-    if (wpa_driver_wext_get_ifflags(drv, &flags) != 0) {
+-        printf("Could not get interface '%s' flags\n", drv->ifname);
+-    } else if (!(flags & IFF_UP)) {
+-        if (wpa_driver_wext_set_ifflags(drv, flags | IFF_UP) != 0) {
+-            printf("Could not set interface '%s' UP\n",
+-                   drv->ifname);
+-        } else {
+-            /*
+-             * Wait some time to allow driver to initialize before
+-             * starting configuring the driver. This seems to be
+-             * needed at least some drivers that load firmware etc.
+-             * when the interface is set up.
+-             */
+-            wpa_printf(MSG_DEBUG, "Interface %s set UP - waiting "
+-                   "a second for the driver to complete "
+-                   "initialization", drv->ifname);
+-            sleep(1);
+-        }
+-    }
+-
+-    /*
+-     * Make sure that the driver does not have any obsolete PMKID entries.
+-     */
+-    wpa_driver_wext_flush_pmkid(drv);
+-
+-    if (wpa_driver_wext_set_mode(drv, 0) < 0) {
+-        printf("Could not configure driver to use managed mode\n");
+-    }
+-
+-    wpa_driver_wext_get_range(drv);
+-
+-    /*
+-     * Unlock the driver's BSSID and force to a random SSID to clear any
+-     * previous association the driver might have when the supplicant
+-     * starts up.
+-     */
+-    wpa_driver_wext_disconnect(drv);
+-
+-    drv->ifindex = if_nametoindex(drv->ifname);
+-
+-    if (os_strncmp(drv->ifname, "wlan", 4) == 0) {
+-        /*
+-         * Host AP driver may use both wlan# and wifi# interface in
+-         * wireless events. Since some of the versions included WE-18
+-         * support, let's add the alternative ifindex also from
+-         * driver_wext.c for the time being. This may be removed at
+-         * some point once it is believed that old versions of the
+-         * driver are not in use anymore.
+-         */
+-        char ifname2[IFNAMSIZ + 1];
+-        os_strlcpy(ifname2, drv->ifname, sizeof(ifname2));
+-        os_memcpy(ifname2, "wifi", 4);
+-        wpa_driver_wext_alternative_ifindex(drv, ifname2);
+-    }
+-
+-    wpa_driver_wext_send_oper_ifla(drv, 1, IF_OPER_DORMANT);
+-}
+-
+-
+-/**
+- * wpa_driver_wext_set_scan_timeout - Set scan timeout to report scan completion
+- * @priv:  Pointer to private wext data from wpa_driver_wext_init()
+- *
+- * This function can be used to set registered timeout when starting a scan to
+- * generate a scan completed event if the driver does not report this.
+- */
+-static void wpa_driver_wext_set_scan_timeout(void *priv)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    int timeout = 10; /* In case scan A and B bands it can be long */
+-
+-    /* Not all drivers generate "scan completed" wireless event, so try to
+-     * read results after a timeout. */
+-    if (drv->scan_complete_events) {
+-        /*
+-         * The driver seems to deliver SIOCGIWSCAN events to notify
+-         * when scan is complete, so use longer timeout to avoid race
+-         * conditions with scanning and following association request.
+-         */
+-        timeout = 30;
+-    }
+-    wpa_printf(MSG_DEBUG, "Scan requested - scan timeout %d seconds",
+-           timeout);
+-    eloop_cancel_timeout(wpa_driver_wext_scan_timeout, drv, drv->ctx);
+-    eloop_register_timeout(timeout, 0, wpa_driver_wext_scan_timeout, drv,
+-                   drv->ctx);
+-}
+-
+-
+-static u8 * wpa_driver_wext_giwscan(struct wpa_driver_wext_data *drv,
+-                    size_t *len)
+-{
+-    struct iwreq iwr;
+-    u8 *res_buf;
+-    size_t res_buf_len;
+-
+-    res_buf_len = IW_SCAN_MAX_DATA;
+-    for (;;) {
+-        res_buf = os_malloc(res_buf_len);
+-        if (res_buf == NULL) {
+-            return NULL;
+-        }
+-        os_memset(&iwr, 0, sizeof(iwr));
+-        os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-        iwr.u.data.pointer = res_buf;
+-        iwr.u.data.length = res_buf_len;
+-
+-        if (ioctl(drv->ioctl_sock, SIOCGIWSCAN, &iwr) == 0) {
+-            break;
+-        }
+-
+-        if (errno == E2BIG && res_buf_len < 65535) {
+-            os_free(res_buf);
+-            res_buf = NULL;
+-            res_buf_len *= 2;
+-            if (res_buf_len > 65535) {
+-                res_buf_len = 65535; /* 16-bit length field */
+-            }
+-            wpa_printf(MSG_DEBUG, "Scan results did not fit - "
+-                   "trying larger buffer (%lu bytes)",
+-                   (unsigned long) res_buf_len);
+-        } else {
+-            wpa_printf(MSG_ERROR, "ioctl[SIOCGIWSCAN]: %d", errno);
+-            os_free(res_buf);
+-            return NULL;
+-        }
+-    }
+-
+-    if (iwr.u.data.length > res_buf_len) {
+-        os_free(res_buf);
+-        return NULL;
+-    }
+-    *len = iwr.u.data.length;
+-
+-    return res_buf;
+-}
+-
+-
+-/*
+- * Data structure for collecting WEXT scan results. This is needed to allow
+- * the various methods of reporting IEs to be combined into a single IE buffer.
+- */
+-struct wext_scan_data {
+-    struct wpa_scan_res res;
+-    u8 *ie;
+-    size_t ie_len;
+-    u8 ssid[32];
+-    size_t ssid_len;
+-    int maxrate;
+-};
+-
+-
+-static void wext_get_scan_mode(struct iw_event *iwe,
+-                   struct wext_scan_data *res)
+-{
+-    if (iwe->u.mode == IW_MODE_ADHOC) {
+-        res->res.caps |= IEEE80211_CAP_IBSS;
+-    } else if (iwe->u.mode == IW_MODE_MASTER ||
+-             iwe->u.mode == IW_MODE_INFRA) {
+-        res->res.caps |= IEEE80211_CAP_ESS;
+-    }
+-}
+-
+-
+-static void wext_get_scan_ssid(struct iw_event *iwe,
+-                   struct wext_scan_data *res, char *custom,
+-                   char *end)
+-{
+-    int ssid_len = iwe->u.essid.length;
+-    if (custom + ssid_len > end) {
+-        return;
+-    }
+-    if (iwe->u.essid.flags &&
+-        ssid_len > 0 &&
+-        ssid_len <= IW_ESSID_MAX_SIZE) {
+-        os_memcpy(res->ssid, custom, ssid_len);
+-        res->ssid_len = ssid_len;
+-    }
+-}
+-
+-
+-static void wext_get_scan_freq(struct iw_event *iwe,
+-                   struct wext_scan_data *res)
+-{
+-    int divi = 1000000, i;
+-
+-    if (iwe->u.freq.e == 0) {
+-        /*
+-         * Some drivers do not report frequency, but a channel.
+-         * Try to map this to frequency by assuming they are using
+-         * IEEE 802.11b/g.  But don't overwrite a previously parsed
+-         * frequency if the driver sends both frequency and channel,
+-         * since the driver may be sending an A-band channel that we
+-         * don't handle here.
+-         */
+-
+-        if (res->res.freq) {
+-            return;
+-        }
+-
+-        if (iwe->u.freq.m >= 1 && iwe->u.freq.m <= 13) {
+-            res->res.freq = 2407 + 5 * iwe->u.freq.m;
+-            return;
+-        } else if (iwe->u.freq.m == 14) {
+-            res->res.freq = 2484;
+-            return;
+-        }
+-    }
+-
+-    if (iwe->u.freq.e > 6) {
+-        wpa_printf(MSG_DEBUG, "Invalid freq in scan results (BSSID="
+-               MACSTR " m=%d e=%d)",
+-               MAC2STR(res->res.bssid), iwe->u.freq.m,
+-               iwe->u.freq.e);
+-        return;
+-    }
+-
+-    for (i = 0; i < iwe->u.freq.e; i++)
+-        divi /= 10;
+-    res->res.freq = iwe->u.freq.m / divi;
+-}
+-
+-
+-static void wext_get_scan_qual(struct iw_event *iwe,
+-                   struct wext_scan_data *res)
+-{
+-    res->res.qual = iwe->u.qual.qual;
+-    res->res.noise = iwe->u.qual.noise;
+-    res->res.level = iwe->u.qual.level;
+-}
+-
+-
+-static void wext_get_scan_encode(struct iw_event *iwe,
+-                 struct wext_scan_data *res)
+-{
+-    if (!(iwe->u.data.flags & IW_ENCODE_DISABLED)) {
+-        res->res.caps |= IEEE80211_CAP_PRIVACY;
+-    }
+-}
+-
+-
+-static void wext_get_scan_rate(struct iw_event *iwe,
+-                   struct wext_scan_data *res, char *pos,
+-                   char *end)
+-{
+-    int maxrate;
+-    char *custom = pos + IW_EV_LCP_LEN;
+-    struct iw_param p;
+-    size_t clen;
+-
+-    clen = iwe->len;
+-    if (custom + clen > end) {
+-        return;
+-    }
+-    maxrate = 0;
+-    while (((ssize_t) clen) >= (ssize_t) sizeof(struct iw_param)) {
+-        /* Note: may be misaligned, make a local, aligned copy */
+-        os_memcpy(&p, custom, sizeof(struct iw_param));
+-        if (p.value > maxrate) {
+-            maxrate = p.value;
+-        }
+-        clen -= sizeof(struct iw_param);
+-        custom += sizeof(struct iw_param);
+-    }
+-
+-    /* Convert the maxrate from WE-style (b/s units) to
+-     * 802.11 rates (500000 b/s units).
+-     */
+-    res->maxrate = maxrate / 500000;
+-}
+-
+-
+-static void wext_get_scan_iwevgenie(struct iw_event *iwe,
+-                    struct wext_scan_data *res, char *custom,
+-                    char *end)
+-{
+-    char *genie, *gpos, *gend;
+-    u8 *tmp;
+-
+-    if (iwe->u.data.length == 0) {
+-        return;
+-    }
+-
+-    gpos = genie = custom;
+-    gend = genie + iwe->u.data.length;
+-    if (gend > end) {
+-        wpa_printf(MSG_INFO, "IWEVGENIE overflow");
+-        return;
+-    }
+-
+-    tmp = os_realloc(res->ie, res->ie_len + gend - gpos);
+-    if (tmp == NULL) {
+-        return;
+-    }
+-    os_memcpy(tmp + res->ie_len, gpos, gend - gpos);
+-    res->ie = tmp;
+-    res->ie_len += gend - gpos;
+-}
+-
+-
+-static void wext_get_scan_custom(struct iw_event *iwe,
+-                 struct wext_scan_data *res, char *custom,
+-                 char *end)
+-{
+-    size_t clen;
+-    u8 *tmp;
+-
+-    clen = iwe->u.data.length;
+-    if (custom + clen > end) {
+-        return;
+-    }
+-
+-    if (clen > 7 && os_strncmp(custom, "wpa_ie=", 7) == 0) {
+-        char *spos;
+-        int bytes;
+-        spos = custom + 7;
+-        bytes = custom + clen - spos;
+-        if (bytes & 1 || bytes == 0) {
+-            return;
+-        }
+-        bytes /= 2;
+-        tmp = os_realloc(res->ie, res->ie_len + bytes);
+-        if (tmp == NULL) {
+-            return;
+-        }
+-        hexstr2bin(spos, tmp + res->ie_len, bytes);
+-        res->ie = tmp;
+-        res->ie_len += bytes;
+-    } else if (clen > 7 && os_strncmp(custom, "rsn_ie=", 7) == 0) {
+-        char *spos;
+-        int bytes;
+-        spos = custom + 7;
+-        bytes = custom + clen - spos;
+-        if (bytes & 1 || bytes == 0) {
+-            return;
+-        }
+-        bytes /= 2;
+-        tmp = os_realloc(res->ie, res->ie_len + bytes);
+-        if (tmp == NULL) {
+-            return;
+-        }
+-        hexstr2bin(spos, tmp + res->ie_len, bytes);
+-        res->ie = tmp;
+-        res->ie_len += bytes;
+-    } else if (clen > 4 && os_strncmp(custom, "tsf=", 4) == 0) {
+-        char *spos;
+-        int bytes;
+-        u8 bin[8];
+-        spos = custom + 4;
+-        bytes = custom + clen - spos;
+-        if (bytes != 16) {
+-            wpa_printf(MSG_INFO, "Invalid TSF length (%d)", bytes);
+-            return;
+-        }
+-        bytes /= 2;
+-        hexstr2bin(spos, bin, bytes);
+-        res->res.tsf += WPA_GET_BE64(bin);
+-    }
+-}
+-
+-
+-static int wext_19_iw_point(struct wpa_driver_wext_data *drv, u16 cmd)
+-{
+-    return drv->we_version_compiled > 18 &&
+-        (cmd == SIOCGIWESSID || cmd == SIOCGIWENCODE ||
+-         cmd == IWEVGENIE || cmd == IWEVCUSTOM);
+-}
+-
+-
+-static void wpa_driver_wext_add_scan_entry(struct wpa_scan_results *res,
+-                       struct wext_scan_data *data)
+-{
+-    struct wpa_scan_res **tmp;
+-    struct wpa_scan_res *r;
+-    size_t extra_len;
+-    u8 *pos, *end, *ssid_ie = NULL, *rate_ie = NULL;
+-
+-    /* Figure out whether we need to fake any IEs */
+-    pos = data->ie;
+-    end = pos + data->ie_len;
+-    while (pos && pos + 1 < end) {
+-        if (pos + 2 + pos[1] > end) {
+-            break;
+-        }
+-        if (pos[0] == WLAN_EID_SSID) {
+-            ssid_ie = pos;
+-        } else if (pos[0] == WLAN_EID_SUPP_RATES) {
+-            rate_ie = pos;
+-        } else if (pos[0] == WLAN_EID_EXT_SUPP_RATES) {
+-            rate_ie = pos;
+-        }
+-        pos += 2 + pos[1];
+-    }
+-
+-    extra_len = 0;
+-    if (ssid_ie == NULL) {
+-        extra_len += 2 + data->ssid_len;
+-    }
+-    if (rate_ie == NULL && data->maxrate) {
+-        extra_len += 3;
+-    }
+-
+-    r = os_zalloc(sizeof(*r) + extra_len + data->ie_len);
+-    if (r == NULL) {
+-        return;
+-    }
+-    os_memcpy(r, &data->res, sizeof(*r));
+-    r->ie_len = extra_len + data->ie_len;
+-    pos = (u8 *) (r + 1);
+-    if (ssid_ie == NULL) {
+-        /*
+-         * Generate a fake SSID IE since the driver did not report
+-         * a full IE list.
+-         */
+-        *pos++ = WLAN_EID_SSID;
+-        *pos++ = data->ssid_len;
+-        os_memcpy(pos, data->ssid, data->ssid_len);
+-        pos += data->ssid_len;
+-    }
+-    if (rate_ie == NULL && data->maxrate) {
+-        /*
+-         * Generate a fake Supported Rates IE since the driver did not
+-         * report a full IE list.
+-         */
+-        *pos++ = WLAN_EID_SUPP_RATES;
+-        *pos++ = 1;
+-        *pos++ = data->maxrate;
+-    }
+-    if (data->ie) {
+-        os_memcpy(pos, data->ie, data->ie_len);
+-    }
+-
+-    tmp = os_realloc(res->res,
+-             (res->num + 1) * sizeof(struct wpa_scan_res *));
+-    if (tmp == NULL) {
+-        os_free(r);
+-        return;
+-    }
+-    tmp[res->num++] = r;
+-    res->res = tmp;
+-}
+-
+-
+-
+-static int wpa_driver_wext_get_range(void *priv)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct iw_range *range;
+-    struct iwreq iwr;
+-    int minlen;
+-    size_t buflen;
+-
+-    /*
+-     * Use larger buffer than struct iw_range in order to allow the
+-     * structure to grow in the future.
+-     */
+-    buflen = sizeof(struct iw_range) + 500;
+-    range = os_zalloc(buflen);
+-    if (range == NULL) {
+-        return -1;
+-    }
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    iwr.u.data.pointer = (caddr_t) range;
+-    iwr.u.data.length = buflen;
+-
+-    minlen = ((char *) &range->enc_capa) - (char *) range +
+-        sizeof(range->enc_capa);
+-
+-    if (ioctl(drv->ioctl_sock, SIOCGIWRANGE, &iwr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCGIRANGE]");
+-        os_free(range);
+-        return -1;
+-    } else if (iwr.u.data.length >= minlen &&
+-           range->we_version_compiled >= 18) {
+-        wpa_printf(MSG_DEBUG, "SIOCGIWRANGE: WE(compiled)=%d "
+-               "WE(source)=%d enc_capa=0x%x",
+-               range->we_version_compiled,
+-               range->we_version_source,
+-               range->enc_capa);
+-        drv->has_capability = 1;
+-        drv->we_version_compiled = range->we_version_compiled;
+-        if (range->enc_capa & IW_ENC_CAPA_WPA) {
+-            drv->capa.key_mgmt |= WPA_DRIVER_CAPA_KEY_MGMT_WPA |
+-                WPA_DRIVER_CAPA_KEY_MGMT_WPA_PSK;
+-        }
+-        if (range->enc_capa & IW_ENC_CAPA_WPA2) {
+-            drv->capa.key_mgmt |= WPA_DRIVER_CAPA_KEY_MGMT_WPA2 |
+-                WPA_DRIVER_CAPA_KEY_MGMT_WPA2_PSK;
+-        }
+-        drv->capa.enc |= WPA_DRIVER_CAPA_ENC_WEP40 |
+-            WPA_DRIVER_CAPA_ENC_WEP104;
+-        if (range->enc_capa & IW_ENC_CAPA_CIPHER_TKIP) {
+-            drv->capa.enc |= WPA_DRIVER_CAPA_ENC_TKIP;
+-        }
+-        if (range->enc_capa & IW_ENC_CAPA_CIPHER_CCMP) {
+-            drv->capa.enc |= WPA_DRIVER_CAPA_ENC_CCMP;
+-        }
+-        if (range->enc_capa & IW_ENC_CAPA_4WAY_HANDSHAKE) {
+-            drv->capa.flags |= WPA_DRIVER_FLAGS_4WAY_HANDSHAKE;
+-        }
+-        drv->capa.auth = WPA_DRIVER_AUTH_OPEN |
+-            WPA_DRIVER_AUTH_SHARED |
+-            WPA_DRIVER_AUTH_LEAP;
+-
+-        wpa_printf(MSG_DEBUG, "  capabilities: key_mgmt 0x%x enc 0x%x "
+-               "flags 0x%x",
+-               drv->capa.key_mgmt, drv->capa.enc, drv->capa.flags);
+-    } else {
+-        wpa_printf(MSG_DEBUG, "SIOCGIWRANGE: too old (short) data - "
+-               "assuming WPA is not supported");
+-    }
+-
+-    os_free(range);
+-    return 0;
+-}
+-
+-
+-static int wpa_driver_wext_set_wpa(void *priv, int enabled)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+-
+-    return wpa_driver_wext_set_auth_param(drv, IW_AUTH_WPA_ENABLED,
+-                          enabled);
+-}
+-
+-
+-static int wpa_driver_wext_set_psk(struct wpa_driver_wext_data *drv,
+-                   const u8 *psk)
+-{
+-    struct iw_encode_ext *ext;
+-    struct iwreq iwr;
+-    int ret;
+-
+-    wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+-
+-    if (!(drv->capa.flags & WPA_DRIVER_FLAGS_4WAY_HANDSHAKE)) {
+-        return 0;
+-    }
+-
+-    if (!psk) {
+-        return 0;
+-    }
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-
+-    ext = os_zalloc(sizeof(*ext) + PMK_LEN);
+-    if (ext == NULL) {
+-        return -1;
+-    }
+-
+-    iwr.u.encoding.pointer = (caddr_t) ext;
+-    iwr.u.encoding.length = sizeof(*ext) + PMK_LEN;
+-    ext->key_len = PMK_LEN;
+-    os_memcpy(&ext->key, psk, ext->key_len);
+-    ext->alg = IW_ENCODE_ALG_PMK;
+-
+-    ret = ioctl(drv->ioctl_sock, SIOCSIWENCODEEXT, &iwr);
+-    if (ret < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCSIWENCODEEXT] PMK");
+-    }
+-    os_free(ext);
+-
+-    return ret;
+-}
+-
+-
+-static int wpa_driver_wext_set_key_ext(void *priv, wpa_alg alg,
+-                       const u8 *addr, int key_idx,
+-                       int set_tx, const u8 *seq,
+-                       size_t seq_len,
+-                       const u8 *key, size_t key_len)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct iwreq iwr;
+-    int ret = 0;
+-    struct iw_encode_ext *ext;
+-
+-    if (seq_len > IW_ENCODE_SEQ_MAX_SIZE) {
+-        wpa_printf(MSG_DEBUG, "%s: Invalid seq_len %lu",
+-               __FUNCTION__, (unsigned long) seq_len);
+-        return -1;
+-    }
+-
+-    ext = os_zalloc(sizeof(*ext) + key_len);
+-    if (ext == NULL) {
+-        return -1;
+-    }
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    iwr.u.encoding.flags = key_idx + 1;
+-    iwr.u.encoding.flags |= IW_ENCODE_TEMP;
+-    if (alg == WPA_ALG_NONE) {
+-        iwr.u.encoding.flags |= IW_ENCODE_DISABLED;
+-    }
+-    iwr.u.encoding.pointer = (caddr_t) ext;
+-    iwr.u.encoding.length = sizeof(*ext) + key_len;
+-
+-    if (addr == NULL ||
+-        os_memcmp(addr, "\xff\xff\xff\xff\xff\xff", ETH_ALEN) == 0) {
+-        ext->ext_flags |= IW_ENCODE_EXT_GROUP_KEY;
+-    }
+-    if (set_tx) {
+-        ext->ext_flags |= IW_ENCODE_EXT_SET_TX_KEY;
+-    }
+-
+-    ext->addr.sa_family = ARPHRD_ETHER;
+-    if (addr) {
+-        os_memcpy(ext->addr.sa_data, addr, ETH_ALEN);
+-    } else {
+-        os_memset(ext->addr.sa_data, 0xff, ETH_ALEN);
+-    }
+-    if (key && key_len) {
+-        os_memcpy(ext + 1, key, key_len);
+-        ext->key_len = key_len;
+-    }
+-    switch (alg) {
+-    case WPA_ALG_NONE:
+-        ext->alg = IW_ENCODE_ALG_NONE;
+-        break;
+-    case WPA_ALG_WEP:
+-        ext->alg = IW_ENCODE_ALG_WEP;
+-        break;
+-    case WPA_ALG_TKIP:
+-        ext->alg = IW_ENCODE_ALG_TKIP;
+-        break;
+-    case WPA_ALG_CCMP:
+-        ext->alg = IW_ENCODE_ALG_CCMP;
+-        break;
+-    case WPA_ALG_PMK:
+-        ext->alg = IW_ENCODE_ALG_PMK;
+-        break;
+-#ifdef CONFIG_IEEE80211W
+-    case WPA_ALG_IGTK:
+-        ext->alg = IW_ENCODE_ALG_AES_CMAC;
+-        break;
+-#endif /* CONFIG_IEEE80211W */
+-    default:
+-        wpa_printf(MSG_DEBUG, "%s: Unknown algorithm %d",
+-               __FUNCTION__, alg);
+-        os_free(ext);
+-        return -1;
+-    }
+-
+-    if (seq && seq_len) {
+-        ext->ext_flags |= IW_ENCODE_EXT_RX_SEQ_VALID;
+-        os_memcpy(ext->rx_seq, seq, seq_len);
+-    }
+-
+-    if (ioctl(drv->ioctl_sock, SIOCSIWENCODEEXT, &iwr) < 0) {
+-        ret = errno == EOPNOTSUPP ? -2 : -1;
+-        if (errno == ENODEV) {
+-            /*
+-             * ndiswrapper seems to be returning incorrect error
+-             * code.. */
+-            ret = -2;
+-        }
+-
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCSIWENCODEEXT]");
+-    }
+-
+-    os_free(ext);
+-    return ret;
+-}
+-
+-
+-static int wpa_driver_wext_set_countermeasures(void *priv,
+-                           int enabled)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+-    return wpa_driver_wext_set_auth_param(drv,
+-                          IW_AUTH_TKIP_COUNTERMEASURES,
+-                          enabled);
+-}
+-
+-
+-static int wpa_driver_wext_set_drop_unencrypted(void *priv,
+-                        int enabled)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+-    drv->use_crypt = enabled;
+-    return wpa_driver_wext_set_auth_param(drv, IW_AUTH_DROP_UNENCRYPTED,
+-                          enabled);
+-}
+-
+-
+-static int wpa_driver_wext_mlme(struct wpa_driver_wext_data *drv,
+-                const u8 *addr, int cmd, int reason_code)
+-{
+-    struct iwreq iwr;
+-    struct iw_mlme mlme;
+-    int ret = 0;
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    os_memset(&mlme, 0, sizeof(mlme));
+-    mlme.cmd = cmd;
+-    mlme.reason_code = reason_code;
+-    mlme.addr.sa_family = ARPHRD_ETHER;
+-    os_memcpy(mlme.addr.sa_data, addr, ETH_ALEN);
+-    iwr.u.data.pointer = (caddr_t) &mlme;
+-    iwr.u.data.length = sizeof(mlme);
+-
+-    if (ioctl(drv->ioctl_sock, SIOCSIWMLME, &iwr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCSIWMLME]");
+-        ret = -1;
+-    }
+-
+-    return ret;
+-}
+-
+-
+-static void wpa_driver_wext_disconnect(struct wpa_driver_wext_data *drv)
+-{
+-    struct iwreq iwr;
+-    const u8 null_bssid[ETH_ALEN] = { 0, 0, 0, 0, 0, 0 };
+-#ifndef ANDROID
+-    u8 ssid[32];
+-    int i;
+-#endif
+-
+-    /*
+-     * Only force-disconnect when the card is in infrastructure mode,
+-     * otherwise the driver might interpret the cleared BSSID and random
+-     * SSID as an attempt to create a new ad-hoc network.
+-     */
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    if (ioctl(drv->ioctl_sock, SIOCGIWMODE, &iwr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCGIWMODE]");
+-        iwr.u.mode = IW_MODE_INFRA;
+-    }
+-
+-    if (iwr.u.mode == IW_MODE_INFRA) {
+-        /*
+-         * Clear the BSSID selection and set a random SSID to make sure
+-         * the driver will not be trying to associate with something
+-         * even if it does not understand SIOCSIWMLME commands (or
+-         * tries to associate automatically after deauth/disassoc).
+-         */
+-        wpa_driver_wext_set_bssid(drv, null_bssid);
+-#ifndef ANDROID
+-        for (i = 0; i < 32; i++)
+-            ssid[i] = rand() & 0xFF;
+-        wpa_driver_wext_set_ssid(drv, ssid, 32);
+-#endif
+-    }
+-}
+-
+-
+-static int wpa_driver_wext_deauthenticate(void *priv, const u8 *addr,
+-                      int reason_code)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    int ret;
+-    wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+-    ret = wpa_driver_wext_mlme(drv, addr, IW_MLME_DEAUTH, reason_code);
+-    wpa_driver_wext_disconnect(drv);
+-    return ret;
+-}
+-
+-
+-static int wpa_driver_wext_disassociate(void *priv, const u8 *addr,
+-                    int reason_code)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    int ret;
+-    wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+-    ret = wpa_driver_wext_mlme(drv, addr, IW_MLME_DISASSOC, reason_code);
+-    wpa_driver_wext_disconnect(drv);
+-    return ret;
+-}
+-
+-
+-static int wpa_driver_wext_set_gen_ie(void *priv, const u8 *ie,
+-                      size_t ie_len)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct iwreq iwr;
+-    int ret = 0;
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    iwr.u.data.pointer = (caddr_t) ie;
+-    iwr.u.data.length = ie_len;
+-
+-    if (ioctl(drv->ioctl_sock, SIOCSIWGENIE, &iwr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCSIWGENIE]");
+-        ret = -1;
+-    }
+-
+-    return ret;
+-}
+-
+-
+-static int
+-wpa_driver_wext_auth_alg_fallback(struct wpa_driver_wext_data *drv,
+-                  struct wpa_driver_associate_params *params)
+-{
+-    struct iwreq iwr;
+-    int ret = 0;
+-
+-    wpa_printf(MSG_DEBUG, "WEXT: Driver did not support "
+-           "SIOCSIWAUTH for AUTH_ALG, trying SIOCSIWENCODE");
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    /* Just changing mode, not actual keys */
+-    iwr.u.encoding.flags = 0;
+-    iwr.u.encoding.pointer = (caddr_t) NULL;
+-    iwr.u.encoding.length = 0;
+-
+-    /*
+-     * Note: IW_ENCODE_{OPEN,RESTRICTED} can be interpreted to mean two
+-     * different things. Here they are used to indicate Open System vs.
+-     * Shared Key authentication algorithm. However, some drivers may use
+-     * them to select between open/restricted WEP encrypted (open = allow
+-     * both unencrypted and encrypted frames; restricted = only allow
+-     * encrypted frames).
+-     */
+-
+-    if (!drv->use_crypt) {
+-        iwr.u.encoding.flags |= IW_ENCODE_DISABLED;
+-    } else {
+-        if (params->auth_alg & AUTH_ALG_OPEN_SYSTEM) {
+-            iwr.u.encoding.flags |= IW_ENCODE_OPEN;
+-        }
+-        if (params->auth_alg & AUTH_ALG_SHARED_KEY) {
+-            iwr.u.encoding.flags |= IW_ENCODE_RESTRICTED;
+-        }
+-    }
+-
+-    if (ioctl(drv->ioctl_sock, SIOCSIWENCODE, &iwr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCSIWENCODE]");
+-        ret = -1;
+-    }
+-
+-    return ret;
+-}
+-
+-static int wpa_driver_wext_set_auth_alg(void *priv, int auth_alg)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    int algs = 0, res;
+-
+-    if (auth_alg & AUTH_ALG_OPEN_SYSTEM) {
+-        algs |= IW_AUTH_ALG_OPEN_SYSTEM;
+-    }
+-    if (auth_alg & AUTH_ALG_SHARED_KEY) {
+-        algs |= IW_AUTH_ALG_SHARED_KEY;
+-    }
+-    if (auth_alg & AUTH_ALG_LEAP) {
+-        algs |= IW_AUTH_ALG_LEAP;
+-    }
+-    if (algs == 0) {
+-        /* at least one algorithm should be set */
+-        algs = IW_AUTH_ALG_OPEN_SYSTEM;
+-    }
+-
+-    res = wpa_driver_wext_set_auth_param(drv, IW_AUTH_80211_AUTH_ALG,
+-                         algs);
+-    drv->auth_alg_fallback = res == -2;
+-    return res;
+-}
+-
+-static int wpa_driver_wext_pmksa(struct wpa_driver_wext_data *drv,
+-                 u32 cmd, const u8 *bssid, const u8 *pmkid)
+-{
+-    struct iwreq iwr;
+-    struct iw_pmksa pmksa;
+-    int ret = 0;
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-    os_memset(&pmksa, 0, sizeof(pmksa));
+-    pmksa.cmd = cmd;
+-    pmksa.bssid.sa_family = ARPHRD_ETHER;
+-    if (bssid) {
+-        os_memcpy(pmksa.bssid.sa_data, bssid, ETH_ALEN);
+-    }
+-    if (pmkid) {
+-        os_memcpy(pmksa.pmkid, pmkid, IW_PMKID_LEN);
+-    }
+-    iwr.u.data.pointer = (caddr_t) &pmksa;
+-    iwr.u.data.length = sizeof(pmksa);
+-
+-    if (ioctl(drv->ioctl_sock, SIOCSIWPMKSA, &iwr) < 0) {
+-        if (errno != EOPNOTSUPP) {
+-            wpa_printf(MSG_ERROR, "ioctl[SIOCSIWPMKSA]");
+-        }
+-        ret = -1;
+-    }
+-
+-    return ret;
+-}
+-
+-
+-static int wpa_driver_wext_add_pmkid(void *priv, const u8 *bssid,
+-                     const u8 *pmkid)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    return wpa_driver_wext_pmksa(drv, IW_PMKSA_ADD, bssid, pmkid);
+-}
+-
+-
+-static int wpa_driver_wext_remove_pmkid(void *priv, const u8 *bssid,
+-                    const u8 *pmkid)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    return wpa_driver_wext_pmksa(drv, IW_PMKSA_REMOVE, bssid, pmkid);
+-}
+-
+-
+-static int wpa_driver_wext_flush_pmkid(void *priv)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    return wpa_driver_wext_pmksa(drv, IW_PMKSA_FLUSH, NULL, NULL);
+-}
+-
+-
+-#ifdef ANDROID
+-
+-static int wpa_driver_wext_get_mac_addr(void *priv, u8 *addr)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct ifreq ifr;
+-    static const u8 nullmac[ETH_ALEN] = {0};
+-
+-    os_memset(&ifr, 0, sizeof(ifr));
+-    os_strncpy(ifr.ifr_name, drv->ifname, IFNAMSIZ);
+-
+-    if (ioctl(drv->ioctl_sock, SIOCGIFHWADDR, &ifr) < 0) {
+-        perror("ioctl[SIOCGIFHWADDR]");
+-        return -1;
+-    }
+-    os_memcpy(addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
+-    if (os_memcmp(addr, nullmac, ETH_ALEN) == 0) {
+-        return -1;
+-    }
+-
+-    return 0;
+-}
+-
+-static int wpa_driver_wext_get_rssi(void *priv)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct iwreq iwr;
+-    struct iw_statistics iws;
+-    int sig = 0;
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    iwr.u.data.pointer = (char*)&iws;
+-    iwr.u.data.length  = sizeof(iws);
+-    iwr.u.data.flags = 1;
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-
+-    if (ioctl(drv->ioctl_sock, SIOCGIWSTATS, &iwr) < 0) {
+-        perror("ioctl[SIOCGIWSTATS]");
+-        return -1;
+-    }
+-
+-    sig = iws.qual.level;
+-    if (sig == 0) {
+-        return -1;
+-    }
+-    if (iws.qual.updated & IW_QUAL_DBM) {
+-        sig -= 0x100;
+-    }
+-
+-    return sig;
+-}
+-
+-static int wpa_driver_wext_get_linkspeed(void *priv)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct iwreq iwr;
+-    int linkspeed;
+-
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-
+-    if (ioctl(drv->ioctl_sock, SIOCGIWRATE, &iwr) < 0) {
+-        perror("ioctl[SIOCGIWRATE]");
+-        return -1;
+-    }
+-
+-    linkspeed = iwr.u.bitrate.value / 1000000;
+-
+-    return linkspeed;
+-}
+-
+-static char *wpa_driver_get_country_code(int channels)
+-{
+-    static char *country = "US"; /* WEXT_NUMBER_SCAN_CHANNELS_FCC */
+-
+-    if (channels == WEXT_NUMBER_SCAN_CHANNELS_ETSI) {
+-        country = "EU";
+-    } else if( channels == WEXT_NUMBER_SCAN_CHANNELS_MKK1) {
+-        country = "JP";
+-    }
+-    return country;
+-}
+-
+-/* global NL structures */
+-struct nl_handle *nl_sock;
+-struct nl_cache *nl_cache;
+-struct genl_family *nl80211;
+-
+-static int wpa_driver_init_nl() {
+-    int err;
+-
+-    nl_sock = nl_socket_alloc();
+-    if (!nl_sock) {
+-        wpa_printf(MSG_DEBUG,"Failed to allocate netlink socket.");
+-        return -ENOMEM;
+-    }
+-
+-    if (genl_connect(nl_sock)) {
+-        wpa_printf(MSG_DEBUG,"Failed to connect to generic netlink.");
+-        err = -ENOLINK;
+-        goto out_handle_destroy;
+-    }
+-
+-    genl_ctrl_alloc_cache(nl_sock, &nl_cache);
+-    if (!nl_cache) {
+-        wpa_printf(MSG_DEBUG,"Failed to allocate generic netlink cache.");
+-        err = -ENOMEM;
+-        goto out_handle_destroy;
+-    }
+-
+-    nl80211 = genl_ctrl_search_by_name(nl_cache, "nl80211");
+-    if (!nl80211) {
+-        wpa_printf(MSG_DEBUG,"nl80211 not found.");
+-        err = -ENOENT;
+-        goto out_cache_free;
+-    }
+-
+-    return 0;
+-
+-out_cache_free:
+-    nl_cache_free(nl_cache);
+-out_handle_destroy:
+-    nl_socket_free(nl_sock);
+-    return err;
+-}
+-
+-static void wpa_driver_deinit_nl() {
+-    genl_family_put(nl80211);
+-    nl_cache_free(nl_cache);
+-    nl_socket_free(nl_sock);
+-}
+-
+-static int nl_error_handler(struct sockaddr_nl *nla, struct nlmsgerr *err, void *arg)
+-{
+-    int *ret = (int *)arg;
+-    *ret = err->error;
+-    return NL_STOP;
+-}
+-
+-static int nl_finish_handler(struct nl_msg *msg, void *arg)
+-{
+-     int *ret = (int *)arg;
+-     *ret = 0;
+-     return NL_SKIP;
+-}
+-
+-static int nl_ack_handler(struct nl_msg *msg, void *arg)
+-{
+-    int *ret = (int *)arg;
+-    *ret = 0;
+-    return NL_STOP;
+-}
+-
+-static int wpa_driver_set_power_save(char *iface, int state)
+-{
+-    int ret;
+-    struct nl_cb *cb;
+-    struct nl_msg *msg;
+-    int devidx = 0;
+-    int err;
+-    enum nl80211_ps_state ps_state;
+-
+-    ret = wpa_driver_init_nl();
+-    if (ret != 0) {
+-        return ret;
+-    }
+-
+-    ret = -1;
+-
+-        devidx = if_nametoindex(iface);
+-        if (devidx == 0) {
+-            wpa_printf(MSG_DEBUG,"failed to translate ifname to idx");
+-            goto exit;
+-        }
+-
+-    msg = nlmsg_alloc();
+-    if (!msg) {
+-        wpa_printf(MSG_DEBUG,"failed to allocate netlink message");
+-        goto exit;
+-    }
+-
+-    cb = nl_cb_alloc(NL_CB_DEFAULT);
+-    if (!cb) {
+-        wpa_printf(MSG_DEBUG,"failed to allocate netlink callbacks");
+-        goto out_free_msg;
+-    }
+-
+-    genlmsg_put(msg, 0, 0, genl_family_get_id(nl80211), 0, 0,
+-            NL80211_CMD_SET_POWER_SAVE, 0);
+-
+-    if (state != 0) {
+-        ps_state = NL80211_PS_ENABLED;
+-    } else {
+-        ps_state = NL80211_PS_DISABLED;
+-    }
+-
+-    NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+-    NLA_PUT_U32(msg, NL80211_ATTR_PS_STATE, ps_state);
+-
+-    err = nl_send_auto_complete(nl_sock, msg);
+-    if (err < 0) {
+-        wpa_printf(MSG_DEBUG, "could not send auto_complete: %d", err);
+-        goto out;
+-    }
+-
+-    err = 1;
+-
+-    nl_cb_err(cb, NL_CB_CUSTOM, nl_error_handler, &err);
+-    nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, nl_finish_handler, &err);
+-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, nl_ack_handler, &err);
+-
+-    while (err > 0)
+-        nl_recvmsgs(nl_sock, cb);
+-
+-    ret = 0;
+-out:
+-    nl_cb_put(cb);
+-out_free_msg:
+-    nlmsg_free(msg);
+-nla_put_failure:
+-
+-exit:
+-    wpa_driver_deinit_nl();
+-    return ret;
+-}
+-
+-static int wpa_driver_set_country(char *iface, char *country)
+-{
+-    int ret;
+-    struct nl_cb *cb;
+-    struct nl_msg *msg;
+-    int devidx = 0;
+-    int err;
+-    char alpha2[3];
+-    ret = wpa_driver_init_nl();
+-    if (ret != 0) {
+-        return ret;
+-    }
+-
+-    ret = -1;
+-
+-    devidx = if_nametoindex(iface);
+-    if (devidx == 0) {
+-        wpa_printf(MSG_DEBUG,"failed to translate ifname to idx");
+-        goto exit;
+-    }
+-
+-    msg = nlmsg_alloc();
+-    if (!msg) {
+-        wpa_printf(MSG_DEBUG,"failed to allocate netlink message");
+-        goto exit;
+-    }
+-
+-    cb = nl_cb_alloc(NL_CB_DEFAULT);
+-    if (!cb) {
+-        wpa_printf(MSG_DEBUG,"failed to allocate netlink callbacks");
+-        goto out_free_msg;
+-    }
+-
+-    alpha2[0] = country[0];
+-    alpha2[1] = country[1];
+-    alpha2[2] = '\0';
+-
+-    genlmsg_put(msg, 0, 0, genl_family_get_id(nl80211), 0, 0,
+-            NL80211_CMD_REQ_SET_REG, 0);
+-
+-    NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, devidx);
+-    NLA_PUT_STRING(msg, NL80211_ATTR_REG_ALPHA2, alpha2);
+-
+-    err = nl_send_auto_complete(nl_sock, msg);
+-    if (err < 0) {
+-        wpa_printf(MSG_DEBUG, "could not send auto_complete: %d", err);
+-        goto out;
+-    }
+-
+-    err = 1;
+-
+-    nl_cb_err(cb, NL_CB_CUSTOM, nl_error_handler, &err);
+-    nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, nl_finish_handler, &err);
+-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, nl_ack_handler, &err);
+-
+-    while (err > 0)
+-        nl_recvmsgs(nl_sock, cb);
+-
+-    ret = 0;
+-out:
+-    nl_cb_put(cb);
+-out_free_msg:
+-    nlmsg_free(msg);
+-nla_put_failure:
+-
+-exit:
+-    wpa_driver_deinit_nl();
+-    return ret;
+-}
+-
+-static int wpa_driver_toggle_btcoex_state(char state)
+-{
+-    int ret;
+-    int fd = open("/sys/devices/platform/wl1271/bt_coex_state", O_RDWR, 0);
+-    if (fd == -1) {
+-        return -1;
+-    }
+-
+-    ret = write(fd, &state, sizeof(state));
+-    close(fd);
+-
+-    wpa_printf(MSG_DEBUG, "%s:  set btcoex state to '%c' result = %d", __func__,
+-           state, ret);
+-    return ret;
+-}
+-
+-static int wpa_driver_toggle_rx_filter(char state)
+-{
+-    return 0; /* not implemented yet */
+-}
+-
+-/* we start with "auto" power mode - power_save is on */
+-int g_power_mode = 0;
+-
+-/* currently cached scan type */
+-u8 g_scan_type = IW_SCAN_TYPE_ACTIVE;
+-
+-/* start with "world" num of channels */
+-int g_num_channels = 13;
+-
+-static int wpa_driver_priv_driver_cmd( void *priv, char *cmd, char *buf, size_t buf_len )
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct wpa_supplicant *wpa_s = (struct wpa_supplicant *)(drv->ctx);
+-    int ret = 0, flags;
+-
+-    wpa_printf(MSG_DEBUG, "%s %s len = %d", __func__, cmd, buf_len);
+-
+-    if (os_strcasecmp(cmd, "STOP") == 0) {
+-        if ((wpa_driver_wext_get_ifflags(drv, &flags) == 0) &&
+-            (flags & IFF_UP)) {
+-            wpa_driver_wext_set_ifflags(drv, flags & ~IFF_UP);
+-        }
+-        wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DRIVER_STATE "STOPPED");
+-    } else if (os_strcasecmp(cmd, "START") == 0) {
+-        if ((wpa_driver_wext_get_ifflags(drv, &flags) == 0) &&
+-            !(flags & IFF_UP)) {
+-            wpa_driver_wext_set_ifflags(drv, flags | IFF_UP);
+-        }
+-        wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DRIVER_STATE "STARTED");
+-    } else if (os_strcasecmp(cmd, "MACADDR") == 0) {
+-        u8 macaddr[ETH_ALEN] = {};
+-
+-        ret = wpa_driver_wext_get_mac_addr(priv, macaddr);
+-        if (ret < 0) {
+-            goto out;
+-        }
+-
+-        ret = os_snprintf(buf, buf_len, "Macaddr = " MACSTR "\n", MAC2STR(macaddr));
+-    } else if ((os_strcasecmp(cmd, "RSSI") == 0) || (os_strcasecmp(cmd, "RSSI-APPROX") == 0)) {
+-        u8 ssid[MAX_SSID_LEN];
+-        int rssi;
+-
+-        rssi = wpa_driver_wext_get_rssi(priv);
+-        if ((rssi != -1) && (wpa_driver_wext_get_ssid(priv, ssid) > 0)) {
+-            ret = os_snprintf(buf, buf_len, "%s rssi %d\n", ssid, rssi);
+-        } else {
+-            ret = -1;
+-        }
+-    } else if (os_strcasecmp(cmd, "LINKSPEED") == 0) {
+-        int linkspeed;
+-
+-        linkspeed = wpa_driver_wext_get_linkspeed(priv);
+-        if (linkspeed != -1) {
+-            ret = os_snprintf(buf, buf_len, "LinkSpeed %d\n", linkspeed);
+-        } else {
+-            ret = -1;
+-        }
+-    } else if( os_strcasecmp(cmd, "RELOAD") == 0 ) {
+-        wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
+-    } else if( os_strcasecmp(cmd, "SCAN-PASSIVE") == 0 ) {
+-        g_scan_type = IW_SCAN_TYPE_PASSIVE;
+-        ret = 0;
+-    } else if( os_strcasecmp(cmd, "SCAN-ACTIVE") == 0 ) {
+-        g_scan_type = IW_SCAN_TYPE_ACTIVE;
+-        ret = 0;
+-    } else if( os_strcasecmp(cmd, "SCAN-MODE") == 0 ) {
+-        ret = snprintf(buf, buf_len, "ScanMode = %u\n", g_scan_type);
+-        if (ret < (int)buf_len) {
+-            return ret;
+-        }
+-    } else if( os_strncasecmp(cmd, "POWERMODE", 9) == 0 ) {
+-        int mode = atoi(cmd + 9);
+-
+-        if (mode == g_power_mode) {
+-            ret = 0;
+-        } else if (mode == 1) { /* active mode */
+-            ret = wpa_driver_set_power_save(drv->ifname, 0);
+-        } else if (mode == 0) { /* auto mode */
+-            ret = wpa_driver_set_power_save(drv->ifname, 1);
+-        }
+-
+-        if (!ret) {
+-            g_power_mode = mode;
+-        }
+-
+-        wpa_printf(MSG_DEBUG, "global POWERMODE set to %d (wanted %d), ret %d",
+-               g_power_mode, mode, ret);
+-    } else if( os_strcasecmp(cmd, "GETPOWER") == 0 ) {
+-        ret = sprintf(buf, "powermode = %u\n", g_power_mode);
+-    } else if( os_strncasecmp(cmd, "BTCOEXMODE", 10) == 0 ) {
+-        int mode = atoi(cmd + 10);
+-
+-        wpa_printf(MSG_DEBUG, "will change btcoex mode to: %d", mode);
+-
+-        if (mode == 1) { /* disable BT-coex */
+-            ret = wpa_driver_toggle_btcoex_state('0');
+-        } else if (mode == 2) { /* enable BT-coex */
+-            ret = wpa_driver_toggle_btcoex_state('1');
+-        } else {
+-            wpa_printf(MSG_DEBUG, "invalid btcoex mode: %d", mode);
+-            ret = -1;
+-        }
+-    } else if( os_strcasecmp(cmd, "RXFILTER-START") == 0 ) {
+-        ret = wpa_driver_toggle_rx_filter('1');
+-    } else if( os_strcasecmp(cmd, "RXFILTER-STOP") == 0 ) {
+-        ret = wpa_driver_toggle_rx_filter('0');
+-    } else if( os_strncasecmp(cmd, "country", 7) == 0 ) {
+-        wpa_printf(MSG_DEBUG, "setting country code to: %s", cmd + 8);
+-        ret = wpa_driver_set_country(drv->ifname, cmd + 8);
+-    } else {
+-        wpa_printf(MSG_ERROR, "Unsupported command: %s", cmd);
+-        ret = -1;
+-    }
+-
+-out:
+-    return ret;
+-}
+-
+-#endif
+-
+-/**
+- * wpa_driver_wext_scan_custom - Request the driver to initiate scan
+- * @priv: Pointer to private wext data from wpa_driver_wext_init()
+- * @ssid: Specific SSID to scan for (ProbeReq) or %NULL to scan for
+- *    all SSIDs (either active scan with broadcast SSID or passive
+- *    scan
+- * @ssid_len: Length of the SSID
+- * Returns: 0 on success, -1 on failure
+- */
+-int wpa_driver_wext_scan_custom(void *priv, const u8 *ssid, size_t ssid_len)
+-{
+-    struct wpa_driver_wext_data *drv = priv;
+-    struct iwreq iwr;
+-    int ret = 0;
+-    struct iw_scan_req req;
+-#ifdef ANDROID
+-    struct wpa_supplicant *wpa_s = (struct wpa_supplicant *)(drv->ctx);
+-    int scan_probe_flag = 0;
+-#endif
+-
+-    if (ssid_len > IW_ESSID_MAX_SIZE) {
+-        wpa_printf(MSG_DEBUG, "%s: too long SSID (%lu)",
+-               __FUNCTION__, (unsigned long) ssid_len);
+-        return -1;
+-    }
+-
+-    os_memset(&iwr, 0, sizeof(iwr));
+-    os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+-
+-    os_memset(&req, 0, sizeof(req));
+-    req.scan_type = g_scan_type; /* Scan type is cached */
+-    req.bssid.sa_family = ARPHRD_ETHER;
+-    os_memset(req.bssid.sa_data, 0xff, ETH_ALEN);
+-    iwr.u.data.pointer = (caddr_t) &req;
+-    iwr.u.data.length = sizeof(req);
+-    iwr.u.data.flags = IW_SCAN_THIS_ESSID;
+-
+-    wpa_printf(MSG_DEBUG, "%s: scanning with scan type: %s", __func__,
+-           g_scan_type == IW_SCAN_TYPE_PASSIVE ? "PASSIVE" : "ACTIVE");
+-
+-#ifdef ANDROID
+-    if (wpa_s->prev_scan_ssid != BROADCAST_SSID_SCAN) {
+-        scan_probe_flag = wpa_s->prev_scan_ssid->scan_ssid;
+-    }
+-    wpa_printf(MSG_DEBUG, "%s: specific scan = %d", __func__,
+-        (scan_probe_flag && (ssid && ssid_len)) ? 1 : 0);
+-    if (scan_probe_flag && (ssid && ssid_len)) {
+-#else
+-    if (ssid && ssid_len) {
+-#endif
+-        req.essid_len = ssid_len;
+-        os_memcpy(req.essid, ssid, ssid_len);
+-    }
+-
+-    if (ioctl(drv->ioctl_sock, SIOCSIWSCAN, &iwr) < 0) {
+-        wpa_printf(MSG_ERROR, "ioctl[SIOCSIWSCAN]");
+-        ret = -1;
+-    }
+-
+-    wpa_driver_wext_set_scan_timeout(priv);
+-
+-    return ret;
+-}
+-
+-const struct wpa_driver_ops wpa_driver_custom_ops = {
+-    .name = "mac80211_wext",
+-    .desc = "mac80211 station driver for TI wl12xx",
+-    .get_bssid = wpa_driver_wext_get_bssid,
+-    .get_ssid = wpa_driver_wext_get_ssid,
+-    .set_wpa = wpa_driver_wext_set_wpa,
+-    .set_key = wpa_driver_wext_set_key,
+-    .set_countermeasures = wpa_driver_wext_set_countermeasures,
+-    .set_drop_unencrypted = wpa_driver_wext_set_drop_unencrypted,
+-    .scan = wpa_driver_wext_scan_custom,
+-    .get_scan_results2 = wpa_driver_wext_get_scan_results,
+-    .deauthenticate = wpa_driver_wext_deauthenticate,
+-    .disassociate = wpa_driver_wext_disassociate,
+-    .set_mode = wpa_driver_wext_set_mode,
+-    .associate = wpa_driver_wext_associate,
+-    .set_auth_alg = wpa_driver_wext_set_auth_alg,
+-    .init = wpa_driver_wext_init,
+-    .deinit = wpa_driver_wext_deinit,
+-    .add_pmkid = wpa_driver_wext_add_pmkid,
+-    .remove_pmkid = wpa_driver_wext_remove_pmkid,
+-    .flush_pmkid = wpa_driver_wext_flush_pmkid,
+-    .get_capa = wpa_driver_wext_get_capa,
+-    .set_operstate = wpa_driver_wext_set_operstate,
+-#ifdef ANDROID
+-    .driver_cmd = wpa_driver_priv_driver_cmd,
+-#endif
+-};
+diff --git a/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c b/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
+deleted file mode 100644
+index 3f2512a..0000000
+--- a/mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
++++ /dev/null
+@@ -1,516 +0,0 @@
+-/*
+- * driver_mac80211_nl.c
+- *
+- * Copyright 2001-2010 Texas Instruments, Inc. - http://www.ti.com/
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include "includes.h"
+-#include <sys/ioctl.h>
+-#include <net/if_arp.h>
+-#include <net/if.h>
+-#include <sys/stat.h>
+-#include <fcntl.h>
+-#include <sys/types.h>
+-#include <sys/wait.h>
+-#include <netlink/genl/genl.h>
+-#include <netlink/genl/family.h>
+-#include <netlink/genl/ctrl.h>
+-#include <netlink/msg.h>
+-#include <netlink/attr.h>
+-
+-#include "common.h"
+-#include "driver.h"
+-#include "eloop.h"
+-#include "driver_wext.h"
+-#include "ieee802_11_defs.h"
+-#include "wpa_common.h"
+-#include "wpa_ctrl.h"
+-#include "wpa_supplicant_i.h"
+-#include "config_ssid.h"
+-#include "wpa_debug.h"
+-#include "linux_ioctl.h"
+-#include "driver_nl80211.h"
+-
+-#define WPA_EVENT_DRIVER_STATE          "CTRL-EVENT-DRIVER-STATE "
+-#define DRV_NUMBER_SEQUENTIAL_ERRORS     4
+-
+-#define WPA_PS_ENABLED   0
+-#define WPA_PS_DISABLED  1
+-
+-#define BLUETOOTH_COEXISTENCE_MODE_ENABLED   0
+-#define BLUETOOTH_COEXISTENCE_MODE_DISABLED  1
+-#define BLUETOOTH_COEXISTENCE_MODE_SENSE     2
+-
+-
+-static int g_drv_errors = 0;
+-static int g_power_mode = 0;
+-
+-int send_and_recv_msgs(struct wpa_driver_nl80211_data *drv, struct nl_msg *msg,
+-                       int (*valid_handler)(struct nl_msg *, void *),
+-                       void *valid_data);
+-
+-static void wpa_driver_send_hang_msg(struct wpa_driver_nl80211_data *drv)
+-{
+-	g_drv_errors++;
+-	if (g_drv_errors > DRV_NUMBER_SEQUENTIAL_ERRORS) {
+-		g_drv_errors = 0;
+-		wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
+-	}
+-}
+-
+-static int wpa_driver_toggle_btcoex_state(char state)
+-{
+-	int ret;
+-	int fd = open("/sys/devices/platform/wl1271/bt_coex_state", O_RDWR, 0);
+-	if (fd == -1)
+-		return -1;
+-
+-	ret = write(fd, &state, sizeof(state));
+-	close(fd);
+-
+-	wpa_printf(MSG_DEBUG, "%s:  set btcoex state to '%c' result = %d", __func__,
+-		   state, ret);
+-	return ret;
+-}
+-
+-static int wpa_driver_set_power_save(void *priv, int state)
+-{
+-	struct i802_bss *bss = priv;
+-	struct wpa_driver_nl80211_data *drv = bss->drv;
+-	struct nl_msg *msg;
+-	int ret = -1;
+-	enum nl80211_ps_state ps_state;
+-
+-	msg = nlmsg_alloc();
+-	if (!msg)
+-		return -1;
+-
+-	genlmsg_put(msg, 0, 0, drv->global->nl80211_id, 0, 0,
+-		    NL80211_CMD_SET_POWER_SAVE, 0);
+-
+-	if (state == WPA_PS_ENABLED)
+-		ps_state = NL80211_PS_ENABLED;
+-	else
+-		ps_state = NL80211_PS_DISABLED;
+-
+-	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, drv->ifindex);
+-	NLA_PUT_U32(msg, NL80211_ATTR_PS_STATE, ps_state);
+-
+-	ret = send_and_recv_msgs(drv, msg, NULL, NULL);
+-	msg = NULL;
+-	if (ret < 0)
+-		wpa_printf(MSG_ERROR, "nl80211: Set power mode fail: %d", ret);
+-nla_put_failure:
+-	nlmsg_free(msg);
+-	return ret;
+-}
+-
+-#define MAX_PATTERN_SIZE        256
+-#define MAX_MASK_SIZE           (MAX_PATTERN_SIZE/8)
+-
+-/* Describes a single RX filter configuration */
+-struct rx_filter {
+-	/* name - A human recongmizable name for the filter */
+-	char *name;
+-
+-	/* get_pattern_handler - A handler which enables the user to configure
+-	 * the pattern dynamically (For example filter according to the HW addr).
+-	 * If NULL the static pattern configured will be used.
+-	 * buf - the pattern will be copied to buf
+-	 * buflen - the size of buf
+-	 * arg - A generic input argumet which can be passed to the handler
+-	 */
+-	int (* get_pattern_handler) (u8 *buf, int buflen, void* arg);
+-
+-	/* pattern - A static pattern to filter
+-	 * This array contains the bytes of the pattern. The mask field
+-	 * indicates which bytes should be used in the filter and which
+-	 * can be discarded
+-	 */
+-	u8 pattern[MAX_PATTERN_SIZE];
+-
+-	/* pattern_len - The number of bytes used in pattern */
+-	u8 pattern_len;
+-
+-	/* mask - A bit mask indicating which bytes in pattern should be
+-	 * used for filtering. Each bit here corresponds to a byte in pattern
+-	 */
+-	u8 mask[MAX_MASK_SIZE];
+-
+-	/* mask_len - The number of bytes used in mask */
+-	u8 mask_len;
+-};
+-
+-static u8 *nl80211_rx_filter_get_pattern(struct rx_filter *filter, void *arg)
+-{
+-	if (filter->get_pattern_handler) {
+-		if (filter->get_pattern_handler(filter->pattern,
+-					        filter->pattern_len, arg)) {
+-			return NULL;
+-		}
+-	}
+-
+-	return filter->pattern;
+-}
+-
+-static int nl80211_self_filter_get_pattern_handler(u8 *buf, int buflen, void *arg)
+-{
+-	int ret;
+-	struct i802_bss *bss = (struct i802_bss *)arg;
+-
+-	ret = linux_get_ifhwaddr(bss->drv->global->ioctl_sock,
+-				 bss->ifname, buf);
+-	if (ret) {
+-		wpa_printf(MSG_ERROR, "Failed to get own HW addr (%d)", ret);
+-		return -1;
+-	}
+-	return 0;
+-}
+-
+-static struct rx_filter rx_filters[] = {
+-	/* ID 0 */
+-	{.name = "self",
+-	 .pattern = {},
+-	 .pattern_len = 6,
+-	 .mask = { BIT(0) | BIT(1) | BIT(2) | BIT(3) | BIT(4) | BIT(5) },
+-	 .mask_len = 1,
+-	 .get_pattern_handler = nl80211_self_filter_get_pattern_handler,
+-	},
+-
+-	/* ID 1 */
+-	{.name = "bcast",
+-	 .pattern = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF},
+-	 .pattern_len = 6,
+-	 .mask = { BIT(0) | BIT(1) | BIT(2) | BIT(3) | BIT(4) | BIT(5) },
+-	 .mask_len = 1,
+-	},
+-
+-	/* ID 2 */
+-	{.name = "ipv4mc",
+-	 .pattern = {0x01,0x00,0x5E},
+-	 .pattern_len = 3,
+-	 .mask = { BIT(0) | BIT(1) | BIT(2) },
+-	 .mask_len = 1,
+-	},
+-
+-	/* ID 3 */
+-	{.name = "ipv6mc",
+-	 .pattern = {0x33,0x33},
+-	 .pattern_len = 2,
+-	 .mask = { BIT(0) | BIT(1) },
+-	 .mask_len = 1,
+-	},
+-
+-	/* ID 4 */
+-	{.name = "dhcp",
+-	 .pattern = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0   , 0   ,
+-		     0   , 0   , 0   , 0   , 0   , 0   , 0x45, 0   ,
+-		     0   , 0   , 0   , 0   , 0   , 0   , 0   , 0x11,
+-		     0   , 0   , 0   , 0   , 0   , 0   , 0   , 0   ,
+-		     0   , 0   , 0   , 0   , 0x00, 0x44},
+-	 .pattern_len = 38,
+-	 .mask = { BIT(0) | BIT(1) | BIT(2) | BIT(3) | BIT(4) | BIT(5),
+-		   BIT(6),                            	/* OCTET 2 */
+-		   BIT(7),                            	/* OCTET 3 */
+-		   0,                                 	/* OCTET 4 */
+-		   BIT(4) | BIT(5) },                 	/* OCTET 5 */
+-	 .mask_len = 5,
+-	},
+-	/* ID 5 */
+-	{.name = "arp",
+-	 .pattern = {0   , 0   , 0   , 0   , 0   , 0   , 0   , 0   ,
+-		     0   , 0   , 0   , 0   , 0x08, 0x06},
+-	 .pattern_len = 14,
+-	 .mask = { 0,                                    /* OCTET 1 */
+-		   BIT(4) | BIT(5) },                    /* OCTET 2 */
+-	 .mask_len = 2,
+-	},
+-
+-	/* ID 6 */
+-	{.name = "ssdp",
+-	 .pattern = {0x01, 0x00, 0x5E, 0   , 0   , 0   , 0   , 0   ,
+-		     0   , 0   , 0   , 0   , 0   , 0   , 0x45, 0   ,
+-		     0   , 0   , 0   , 0   , 0   , 0   , 0   , 0x11,
+-		     0   , 0   , 0   , 0   , 0   , 0   , 0xEF, 0xFF,
+-		     0xFF, 0xFA, 0   , 0   , 0x07, 0x6C},
+-	 .pattern_len = 38,
+-	 .mask = { BIT(0) | BIT(1) | BIT(2),             /* OCTET 1 */
+-		   BIT(6),                               /* OCTET 2 */
+-		   BIT(7),                               /* OCTET 3 */
+-		   BIT(6) | BIT(7),                      /* OCTET 4 */
+-		   BIT(0) | BIT(1) | BIT(4) | BIT(5) },  /* OCTET 5 */
+-	 .mask_len = 5,
+-	},
+-};
+-
+-#define NR_RX_FILTERS			(sizeof(rx_filters) / sizeof(struct rx_filter))
+-
+-static int nl80211_set_wowlan_triggers(struct i802_bss *bss, int enable)
+-{
+-	struct nl_msg *msg, *pats = NULL;
+-	struct wpa_driver_nl80211_data *drv = bss->drv;
+-	struct nlattr *wowtrig, *pat;
+-	int i, ret = -1;
+-	int filters;
+-
+-	bss->drv->wowlan_enabled = !!enable;
+-
+-	msg = nlmsg_alloc();
+-	if (!msg)
+-		return -ENOMEM;
+-
+-	genlmsg_put(msg, 0, 0, drv->global->nl80211_id, 0,
+-		    0, NL80211_CMD_SET_WOWLAN, 0);
+-
+-	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->drv->first_bss.ifindex);
+-	wowtrig = nla_nest_start(msg, NL80211_ATTR_WOWLAN_TRIGGERS);
+-
+-	if (!wowtrig) {
+-		ret = -ENOBUFS;
+-		goto nla_put_failure;
+-	}
+-
+-	if (!enable) {
+-		NLA_PUT_FLAG(msg, NL80211_WOWLAN_TRIG_ANY);
+-	} else {
+-		pats = nlmsg_alloc();
+-		if (!pats) {
+-			ret = -ENOMEM;
+-			goto nla_put_failure;
+-		}
+-
+-		/* In ginger filter 0 and 1 are always set but in ICS we
+-		 * only enable unicast. Make sure to always set it, otherwise
+-		 * unicast packets will be dropped.
+-		 * bcast packets are dropped and handled by the firmware */
+-
+-		filters = bss->drv->wowlan_triggers |= 1;
+-
+-		for (i = 0; i < NR_RX_FILTERS; i++) {
+-			if (filters & (1 << i)) {
+-				struct rx_filter *rx_filter = &rx_filters[i];
+-				int patnr = 1;
+-				u8 *pattern = nl80211_rx_filter_get_pattern(rx_filter,bss);
+-
+-				if (!pattern)
+-					continue;
+-
+-				pat = nla_nest_start(pats, patnr++);
+-				NLA_PUT(pats, NL80211_WOWLAN_PKTPAT_MASK,
+-					rx_filter->mask_len,
+-					rx_filter->mask);
+-				NLA_PUT(pats, NL80211_WOWLAN_PKTPAT_PATTERN,
+-					rx_filter->pattern_len,
+-					pattern);
+-
+-				nla_nest_end(pats, pat);
+-			}
+-		}
+-	}
+-
+-	if (pats)
+-		nla_put_nested(msg, NL80211_WOWLAN_TRIG_PKT_PATTERN, pats);
+-
+-	nla_nest_end(msg, wowtrig);
+-
+-	ret = send_and_recv_msgs(bss->drv, msg, NULL, NULL);
+-
+-	if (ret < 0)
+-		wpa_printf(MSG_ERROR, "Failed to set WoWLAN trigger:%d\n", ret);
+-
+-	if (pats)
+-		nlmsg_free(pats);
+-
+-	return 0;
+-
+-nla_put_failure:
+-	nlmsg_free(msg);
+-	return ret;
+-}
+-
+-static int nl80211_toggle_wowlan_trigger(struct i802_bss *bss, int nr,
+-					 int enabled)
+-{
+-	if (nr >= NR_RX_FILTERS) {
+-		wpa_printf(MSG_ERROR, "Unknown filter: %d\n", nr);
+-		return -1;
+-	}
+-
+-	if (enabled)
+-		bss->drv->wowlan_triggers |= 1 << nr;
+-	else
+-		bss->drv->wowlan_triggers &= ~(1 << nr);
+-
+-	if (bss->drv->wowlan_enabled)
+-		nl80211_set_wowlan_triggers(bss, 1);
+-
+-	return 0;
+-}
+-
+-static int nl80211_parse_wowlan_trigger_nr(char *s)
+-{
+-	long i;
+-	char *endp;
+-
+-	i = strtol(s, &endp, 10);
+-
+-	if(endp == s)
+-		return -1;
+-	return i;
+-}
+-
+-static int nl80211_toggle_dropbcast(int enable)
+-{
+-	char filename[90];
+-	int rv;
+-	FILE *f;
+-
+-	snprintf(filename, sizeof(filename) - 1,
+-		 "/sys/bus/platform/devices/wl12xx/drop_bcast");
+-	f = fopen(filename, "w");
+-	if (f == NULL) {
+-		wpa_printf(MSG_DEBUG, "Could not open file %s: %s",
+-			   filename, strerror(errno));
+-		return -1;
+-	}
+-
+-	rv = fprintf(f, "%d", enable);
+-	fclose(f);
+-	if (rv < 1) {
+-		wpa_printf(MSG_DEBUG, "Could not write to file %s: %s",
+-			   filename, strerror(errno));
+-		return -1;
+-	}
+-
+-	return 0;
+-}
+-
+-static int nl80211_dropbcast_get(char *buf, size_t buf_len)
+-{
+-	char filename[90], value[10], *pos;
+-	int f, rv;
+-
+-	snprintf(filename, sizeof(filename) - 1,
+-		 "/sys/bus/platform/devices/wl12xx/drop_bcast");
+-	f = open(filename, O_RDONLY);
+-	if (f < 0) {
+-		wpa_printf(MSG_DEBUG, "Could not open file %s: %s",
+-			   filename, strerror(errno));
+-		return -1;
+-	}
+-
+-	rv = read(f, value, sizeof(value) - 1);
+-	close(f);
+-	if (rv < 0) {
+-		wpa_printf(MSG_DEBUG, "Could not read file %s: %s",
+-			   filename, strerror(errno));
+-		return -1;
+-	}
+-
+-	value[rv] = '\0';
+-	pos = os_strchr(value, '\n');
+-	if (pos)
+-		*pos = '\0';
+-
+-	return snprintf(buf, buf_len, "Drop bcast = %s\n", value);
+-}
+-
+-int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
+-				  size_t buf_len )
+-{
+-	struct i802_bss *bss = priv;
+-	struct wpa_driver_nl80211_data *drv = bss->drv;
+-	struct ifreq ifr;
+-	int ret = 0;
+-
+-	if (os_strcasecmp(cmd, "STOP") == 0) {
+-		linux_set_iface_flags(drv->global->ioctl_sock, bss->ifname, 0);
+-		wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STOPPED");
+-	} else if (os_strcasecmp(cmd, "START") == 0) {
+-		linux_set_iface_flags(drv->global->ioctl_sock, bss->ifname, 1);
+-		wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STARTED");
+-	} else if (os_strcasecmp(cmd, "RELOAD") == 0) {
+-		wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
+-	} else if (os_strncasecmp(cmd, "POWERMODE ", 10) == 0) {
+-		int mode;
+-		mode = atoi(cmd + 10);
+-		ret = wpa_driver_set_power_save(priv, mode);
+-		if (ret < 0) {
+-			wpa_driver_send_hang_msg(drv);
+-		} else {
+-			g_power_mode = mode;
+-			g_drv_errors = 0;
+-		}
+-	} else if (os_strncasecmp(cmd, "GETPOWER", 8) == 0) {
+-		ret = os_snprintf(buf, buf_len, "POWERMODE = %d\n", g_power_mode);
+-	} else if (os_strncasecmp(cmd, "BTCOEXMODE ", 11) == 0) {
+-		int mode = atoi(cmd + 11);
+-		if (mode == BLUETOOTH_COEXISTENCE_MODE_DISABLED) { /* disable BT-coex */
+-			ret = wpa_driver_toggle_btcoex_state('0');
+-		} else if (mode == BLUETOOTH_COEXISTENCE_MODE_SENSE) { /* enable BT-coex */
+-			ret = wpa_driver_toggle_btcoex_state('1');
+-		} else {
+-			wpa_printf(MSG_DEBUG, "invalid btcoex mode: %d", mode);
+-			ret = -1;
+-		}
+-	} else if (os_strcasecmp(cmd, "MACADDR") == 0) {
+-		u8 macaddr[ETH_ALEN] = {};
+-
+-		ret = linux_get_ifhwaddr(drv->global->ioctl_sock, bss->ifname, macaddr);
+-		if (!ret)
+-			ret = os_snprintf(buf, buf_len,
+-					  "Macaddr = " MACSTR "\n", MAC2STR(macaddr));
+-	} else if( os_strncasecmp(cmd, "RXFILTER-ADD ", 13) == 0 ) {
+-		int i = nl80211_parse_wowlan_trigger_nr(cmd + 13);
+-		if(i < 0)
+-			return i;
+-		return nl80211_toggle_wowlan_trigger(bss, i, 1);
+-	} else if( os_strncasecmp(cmd, "RXFILTER-REMOVE ", 16) == 0 ) {
+-		int i = nl80211_parse_wowlan_trigger_nr(cmd + 16);
+-		if(i < 0)
+-			return i;
+-		return nl80211_toggle_wowlan_trigger(bss, i, 0);
+-	} else if( os_strcasecmp(cmd, "RXFILTER-START") == 0 ) {
+-		return nl80211_set_wowlan_triggers(bss, 1);
+-	} else if( os_strcasecmp(cmd, "RXFILTER-STOP") == 0 ) {
+-		return nl80211_set_wowlan_triggers(bss, 0);
+-	} else if( os_strncasecmp(cmd, "DROPBCAST", 9) == 0 ) {
+-		char *value = cmd + 10;
+-
+-		if (!os_strcasecmp(value, "ENABLE") ||
+-		    !os_strcasecmp(value, "1")) {
+-			ret = nl80211_toggle_dropbcast(1);
+-		} else if (!os_strcasecmp(value, "DISABLE") ||
+-			   !os_strcasecmp(value, "0")) {
+-			ret = nl80211_toggle_dropbcast(0);
+-		} else if (!os_strcasecmp(value, "GET") ||
+-			   !os_strlen(value)) {
+-			ret = nl80211_dropbcast_get(buf, buf_len);
+-		} else {
+-			wpa_printf(MSG_ERROR,
+-				   "Invalid parameter for DROPBCAST: %s",
+-				   value);
+-			ret = -1;
+-		}
+-	} else if( os_strncasecmp(cmd, "SETBAND ", 8) == 0 ) {
+-		int val = atoi(cmd + 8);
+-		ret = 0;
+-		if ( val < 0 || val > 2 )
+-			ret = -1;
+-	} else {
+-		wpa_printf(MSG_INFO, "%s: Unsupported command %s", __func__, cmd);
+-	}
+-	return ret;
+-}
+diff --git a/mac80211/wpa_supplicant_lib/driver_nl80211.h b/mac80211/wpa_supplicant_lib/driver_nl80211.h
+deleted file mode 100644
+index 401749b..0000000
+--- a/mac80211/wpa_supplicant_lib/driver_nl80211.h
++++ /dev/null
+@@ -1,196 +0,0 @@
+-/*
+- * Driver interaction with Linux nl80211/cfg80211
+- * Copyright (c) 2002-2010, Jouni Malinen <j@w1.fi>
+- * Copyright (c) 2003-2004, Instant802 Networks, Inc.
+- * Copyright (c) 2005-2006, Devicescape Software, Inc.
+- * Copyright (c) 2007, Johannes Berg <johannes@sipsolutions.net>
+- * Copyright (c) 2009-2010, Atheros Communications
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License version 2 as
+- * published by the Free Software Foundation.
+- *
+- * Alternatively, this software may be distributed under the terms of BSD
+- * license.
+- *
+- * See README and COPYING for more details.
+- */
+-
+-#ifndef _DRIVER_NL80211_H_
+-#define _DRIVER_NL80211_H_
+-
+-#include "includes.h"
+-#include <sys/ioctl.h>
+-#include <sys/types.h>
+-#include <sys/stat.h>
+-#include <fcntl.h>
+-#include <net/if.h>
+-#include <netlink/genl/genl.h>
+-#include <netlink/genl/family.h>
+-#include <netlink/genl/ctrl.h>
+-#include <linux/rtnetlink.h>
+-#include <netpacket/packet.h>
+-#include <linux/filter.h>
+-#include "nl80211_copy.h"
+-
+-#include "common.h"
+-#include "eloop.h"
+-#include "utils/list.h"
+-#include "common/ieee802_11_defs.h"
+-#include "netlink.h"
+-#include "linux_ioctl.h"
+-#include "radiotap.h"
+-#include "radiotap_iter.h"
+-#include "rfkill.h"
+-#include "driver.h"
+-
+-#ifdef CONFIG_LIBNL20
+-/* libnl 2.0 compatibility code */
+-#define nl_handle nl_sock
+-#define nl80211_handle_alloc nl_socket_alloc_cb
+-#define nl80211_handle_destroy nl_socket_free
+-#endif /* CONFIG_LIBNL20 */
+-
+-#ifndef IFF_LOWER_UP
+-#define IFF_LOWER_UP   0x10000         /* driver signals L1 up         */
+-#endif
+-#ifndef IFF_DORMANT
+-#define IFF_DORMANT    0x20000         /* driver signals dormant       */
+-#endif
+-
+-#ifndef IF_OPER_DORMANT
+-#define IF_OPER_DORMANT 5
+-#endif
+-#ifndef IF_OPER_UP
+-#define IF_OPER_UP 6
+-#endif
+-
+-struct nl80211_global {
+-	struct dl_list interfaces;
+-	int if_add_ifindex;
+-	struct netlink_data *netlink;
+-	struct nl_cb *nl_cb;
+-	struct nl_handle *nl;
+-	int nl80211_id;
+-	int ioctl_sock; /* socket for ioctl() use */
+-
+-	struct nl_handle *nl_event;
+-};
+-
+-struct nl80211_wiphy_data {
+-	struct dl_list list;
+-	struct dl_list bsss;
+-	struct dl_list drvs;
+-
+-	struct nl_handle *nl_beacons;
+-	struct nl_cb *nl_cb;
+-
+-	int wiphy_idx;
+-};
+-
+-struct i802_bss {
+-	struct wpa_driver_nl80211_data *drv;
+-	struct i802_bss *next;
+-	int ifindex;
+-	char ifname[IFNAMSIZ + 1];
+-	char brname[IFNAMSIZ];
+-	unsigned int beacon_set:1;
+-	unsigned int added_if_into_bridge:1;
+-	unsigned int added_bridge:1;
+-
+-	u8 addr[ETH_ALEN];
+-
+-	int freq;
+-
+-	struct nl_handle *nl_preq, *nl_mgmt;
+-	struct nl_cb *nl_cb;
+-
+-	struct nl80211_wiphy_data *wiphy_data;
+-	struct dl_list wiphy_list;
+-};
+-
+-struct wpa_driver_nl80211_data {
+-	struct nl80211_global *global;
+-	struct dl_list list;
+-	struct dl_list wiphy_list;
+-	char phyname[32];
+-	void *ctx;
+-	int ifindex;
+-	int if_removed;
+-	int if_disabled;
+-	int ignore_if_down_event;
+-	struct rfkill_data *rfkill;
+-	struct wpa_driver_capa capa;
+-	int has_capability;
+-
+-	int operstate;
+-
+-	int scan_complete_events;
+-
+-	struct nl_cb *nl_cb;
+-
+-	u8 auth_bssid[ETH_ALEN];
+-	u8 bssid[ETH_ALEN];
+-	int associated;
+-	u8 ssid[32];
+-	size_t ssid_len;
+-	enum nl80211_iftype nlmode;
+-	enum nl80211_iftype ap_scan_as_station;
+-	unsigned int assoc_freq;
+-
+-	int monitor_sock;
+-	int monitor_ifidx;
+-	int monitor_refcount;
+-
+-	unsigned int disabled_11b_rates:1;
+-	unsigned int pending_remain_on_chan:1;
+-	unsigned int in_interface_list:1;
+-	unsigned int device_ap_sme:1;
+-	unsigned int poll_command_supported:1;
+-	unsigned int data_tx_status:1;
+-	unsigned int scan_for_auth:1;
+-	unsigned int retry_auth:1;
+-	unsigned int use_monitor:1;
+-
+-	u64 remain_on_chan_cookie;
+-	u64 send_action_cookie;
+-
+-	unsigned int last_mgmt_freq;
+-
+-	struct wpa_driver_scan_filter *filter_ssids;
+-	size_t num_filter_ssids;
+-
+-	struct i802_bss first_bss;
+-
+-	int eapol_tx_sock;
+-
+-#ifdef HOSTAPD
+-	int eapol_sock; /* socket for EAPOL frames */
+-
+-	int default_if_indices[16];
+-	int *if_indices;
+-	int num_if_indices;
+-
+-	int last_freq;
+-	int last_freq_ht;
+-#endif /* HOSTAPD */
+-
+-	/* From failed authentication command */
+-	int auth_freq;
+-	u8 auth_bssid_[ETH_ALEN];
+-	u8 auth_ssid[32];
+-	size_t auth_ssid_len;
+-	int auth_alg;
+-	u8 *auth_ie;
+-	size_t auth_ie_len;
+-	u8 auth_wep_key[4][16];
+-	size_t auth_wep_key_len[4];
+-	int auth_wep_tx_keyidx;
+-	int auth_local_state_change;
+-	int auth_p2p;
+-
+-	u8 wowlan_triggers;
+-	u8 wowlan_enabled;
+-};
+-
+-#endif
+diff --git a/mac80211/wpa_supplicant_lib/nl80211.h b/mac80211/wpa_supplicant_lib/nl80211.h
+deleted file mode 100644
+index ff749b8..0000000
+--- a/mac80211/wpa_supplicant_lib/nl80211.h
++++ /dev/null
+@@ -1,1813 +0,0 @@
+-#ifndef __LINUX_NL80211_H
+-#define __LINUX_NL80211_H
+-/*
+- * 802.11 netlink interface public header
+- *
+- * Copyright 2006-2010 Johannes Berg <johannes@sipsolutions.net>
+- * Copyright 2008 Michael Wu <flamingice@sourmilk.net>
+- * Copyright 2008 Luis Carlos Cobo <luisca@cozybit.com>
+- * Copyright 2008 Michael Buesch <mb@bu3sch.de>
+- * Copyright 2008, 2009 Luis R. Rodriguez <lrodriguez@atheros.com>
+- * Copyright 2008 Jouni Malinen <jouni.malinen@atheros.com>
+- * Copyright 2008 Colin McCabe <colin@cozybit.com>
+- *
+- * Permission to use, copy, modify, and/or distribute this software for any
+- * purpose with or without fee is hereby granted, provided that the above
+- * copyright notice and this permission notice appear in all copies.
+- *
+- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+- *
+- */
+-
+-#include <linux/types.h>
+-
+-/**
+- * DOC: Station handling
+- *
+- * Stations are added per interface, but a special case exists with VLAN
+- * interfaces. When a station is bound to an AP interface, it may be moved
+- * into a VLAN identified by a VLAN interface index (%NL80211_ATTR_STA_VLAN).
+- * The station is still assumed to belong to the AP interface it was added
+- * to.
+- *
+- * TODO: need more info?
+- */
+-
+-/**
+- * DOC: Frame transmission/registration support
+- *
+- * Frame transmission and registration support exists to allow userspace
+- * management entities such as wpa_supplicant react to management frames
+- * that are not being handled by the kernel. This includes, for example,
+- * certain classes of action frames that cannot be handled in the kernel
+- * for various reasons.
+- *
+- * Frame registration is done on a per-interface basis and registrations
+- * cannot be removed other than by closing the socket. It is possible to
+- * specify a registration filter to register, for example, only for a
+- * certain type of action frame. In particular with action frames, those
+- * that userspace registers for will not be returned as unhandled by the
+- * driver, so that the registered application has to take responsibility
+- * for doing that.
+- *
+- * The type of frame that can be registered for is also dependent on the
+- * driver and interface type. The frame types are advertised in wiphy
+- * attributes so applications know what to expect.
+- *
+- * NOTE: When an interface changes type while registrations are active,
+- *       these registrations are ignored until the interface type is
+- *       changed again. This means that changing the interface type can
+- *       lead to a situation that couldn't otherwise be produced, but
+- *       any such registrations will be dormant in the sense that they
+- *       will not be serviced, i.e. they will not receive any frames.
+- *
+- * Frame transmission allows userspace to send for example the required
+- * responses to action frames. It is subject to some sanity checking,
+- * but many frames can be transmitted. When a frame was transmitted, its
+- * status is indicated to the sending socket.
+- *
+- * For more technical details, see the corresponding command descriptions
+- * below.
+- */
+-
+-/**
+- * enum nl80211_commands - supported nl80211 commands
+- *
+- * @NL80211_CMD_UNSPEC: unspecified command to catch errors
+- *
+- * @NL80211_CMD_GET_WIPHY: request information about a wiphy or dump request
+- *    to get a list of all present wiphys.
+- * @NL80211_CMD_SET_WIPHY: set wiphy parameters, needs %NL80211_ATTR_WIPHY or
+- *    %NL80211_ATTR_IFINDEX; can be used to set %NL80211_ATTR_WIPHY_NAME,
+- *    %NL80211_ATTR_WIPHY_TXQ_PARAMS, %NL80211_ATTR_WIPHY_FREQ,
+- *    %NL80211_ATTR_WIPHY_CHANNEL_TYPE, %NL80211_ATTR_WIPHY_RETRY_SHORT,
+- *    %NL80211_ATTR_WIPHY_RETRY_LONG, %NL80211_ATTR_WIPHY_FRAG_THRESHOLD,
+- *    and/or %NL80211_ATTR_WIPHY_RTS_THRESHOLD.
+- *    However, for setting the channel, see %NL80211_CMD_SET_CHANNEL
+- *    instead, the support here is for backward compatibility only.
+- * @NL80211_CMD_NEW_WIPHY: Newly created wiphy, response to get request
+- *    or rename notification. Has attributes %NL80211_ATTR_WIPHY and
+- *    %NL80211_ATTR_WIPHY_NAME.
+- * @NL80211_CMD_DEL_WIPHY: Wiphy deleted. Has attributes
+- *    %NL80211_ATTR_WIPHY and %NL80211_ATTR_WIPHY_NAME.
+- *
+- * @NL80211_CMD_GET_INTERFACE: Request an interface's configuration;
+- *    either a dump request on a %NL80211_ATTR_WIPHY or a specific get
+- *    on an %NL80211_ATTR_IFINDEX is supported.
+- * @NL80211_CMD_SET_INTERFACE: Set type of a virtual interface, requires
+- *    %NL80211_ATTR_IFINDEX and %NL80211_ATTR_IFTYPE.
+- * @NL80211_CMD_NEW_INTERFACE: Newly created virtual interface or response
+- *    to %NL80211_CMD_GET_INTERFACE. Has %NL80211_ATTR_IFINDEX,
+- *    %NL80211_ATTR_WIPHY and %NL80211_ATTR_IFTYPE attributes. Can also
+- *    be sent from userspace to request creation of a new virtual interface,
+- *    then requires attributes %NL80211_ATTR_WIPHY, %NL80211_ATTR_IFTYPE and
+- *    %NL80211_ATTR_IFNAME.
+- * @NL80211_CMD_DEL_INTERFACE: Virtual interface was deleted, has attributes
+- *    %NL80211_ATTR_IFINDEX and %NL80211_ATTR_WIPHY. Can also be sent from
+- *    userspace to request deletion of a virtual interface, then requires
+- *    attribute %NL80211_ATTR_IFINDEX.
+- *
+- * @NL80211_CMD_GET_KEY: Get sequence counter information for a key specified
+- *    by %NL80211_ATTR_KEY_IDX and/or %NL80211_ATTR_MAC.
+- * @NL80211_CMD_SET_KEY: Set key attributes %NL80211_ATTR_KEY_DEFAULT,
+- *    %NL80211_ATTR_KEY_DEFAULT_MGMT, or %NL80211_ATTR_KEY_THRESHOLD.
+- * @NL80211_CMD_NEW_KEY: add a key with given %NL80211_ATTR_KEY_DATA,
+- *    %NL80211_ATTR_KEY_IDX, %NL80211_ATTR_MAC, %NL80211_ATTR_KEY_CIPHER,
+- *    and %NL80211_ATTR_KEY_SEQ attributes.
+- * @NL80211_CMD_DEL_KEY: delete a key identified by %NL80211_ATTR_KEY_IDX
+- *    or %NL80211_ATTR_MAC.
+- *
+- * @NL80211_CMD_GET_BEACON: retrieve beacon information (returned in a
+- *    %NL80222_CMD_NEW_BEACON message)
+- * @NL80211_CMD_SET_BEACON: set the beacon on an access point interface
+- *    using the %NL80211_ATTR_BEACON_INTERVAL, %NL80211_ATTR_DTIM_PERIOD,
+- *    %NL80211_ATTR_BEACON_HEAD and %NL80211_ATTR_BEACON_TAIL attributes.
+- * @NL80211_CMD_NEW_BEACON: add a new beacon to an access point interface,
+- *    parameters are like for %NL80211_CMD_SET_BEACON.
+- * @NL80211_CMD_DEL_BEACON: remove the beacon, stop sending it
+- *
+- * @NL80211_CMD_GET_STATION: Get station attributes for station identified by
+- *    %NL80211_ATTR_MAC on the interface identified by %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_SET_STATION: Set station attributes for station identified by
+- *    %NL80211_ATTR_MAC on the interface identified by %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_NEW_STATION: Add a station with given attributes to the
+- *    the interface identified by %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_DEL_STATION: Remove a station identified by %NL80211_ATTR_MAC
+- *    or, if no MAC address given, all stations, on the interface identified
+- *    by %NL80211_ATTR_IFINDEX.
+- *
+- * @NL80211_CMD_GET_MPATH: Get mesh path attributes for mesh path to
+- *     destination %NL80211_ATTR_MAC on the interface identified by
+- *     %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_SET_MPATH:  Set mesh path attributes for mesh path to
+- *     destination %NL80211_ATTR_MAC on the interface identified by
+- *     %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_NEW_PATH: Add a mesh path with given attributes to the
+- *    the interface identified by %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_DEL_PATH: Remove a mesh path identified by %NL80211_ATTR_MAC
+- *    or, if no MAC address given, all mesh paths, on the interface identified
+- *    by %NL80211_ATTR_IFINDEX.
+- * @NL80211_CMD_SET_BSS: Set BSS attributes for BSS identified by
+- *    %NL80211_ATTR_IFINDEX.
+- *
+- * @NL80211_CMD_GET_REG: ask the wireless core to send us its currently set
+- *     regulatory domain.
+- * @NL80211_CMD_SET_REG: Set current regulatory domain. CRDA sends this command
+- *    after being queried by the kernel. CRDA replies by sending a regulatory
+- *    domain structure which consists of %NL80211_ATTR_REG_ALPHA set to our
+- *    current alpha2 if it found a match. It also provides
+- *     NL80211_ATTR_REG_RULE_FLAGS, and a set of regulatory rules. Each
+- *     regulatory rule is a nested set of attributes  given by
+- *     %NL80211_ATTR_REG_RULE_FREQ_[START|END] and
+- *     %NL80211_ATTR_FREQ_RANGE_MAX_BW with an attached power rule given by
+- *     %NL80211_ATTR_REG_RULE_POWER_MAX_ANT_GAIN and
+- *     %NL80211_ATTR_REG_RULE_POWER_MAX_EIRP.
+- * @NL80211_CMD_REQ_SET_REG: ask the wireless core to set the regulatory domain
+- *     to the specified ISO/IEC 3166-1 alpha2 country code. The core will
+- *     store this as a valid request and then query userspace for it.
+- *
+- * @NL80211_CMD_GET_MESH_PARAMS: Get mesh networking properties for the
+- *    interface identified by %NL80211_ATTR_IFINDEX
+- *
+- * @NL80211_CMD_SET_MESH_PARAMS: Set mesh networking properties for the
+- *      interface identified by %NL80211_ATTR_IFINDEX
+- *
+- * @NL80211_CMD_SET_MGMT_EXTRA_IE: Set extra IEs for management frames. The
+- *    interface is identified with %NL80211_ATTR_IFINDEX and the management
+- *    frame subtype with %NL80211_ATTR_MGMT_SUBTYPE. The extra IE data to be
+- *    added to the end of the specified management frame is specified with
+- *    %NL80211_ATTR_IE. If the command succeeds, the requested data will be
+- *    added to all specified management frames generated by
+- *    kernel/firmware/driver.
+- *    Note: This command has been removed and it is only reserved at this
+- *    point to avoid re-using existing command number. The functionality this
+- *    command was planned for has been provided with cleaner design with the
+- *    option to specify additional IEs in NL80211_CMD_TRIGGER_SCAN,
+- *    NL80211_CMD_AUTHENTICATE, NL80211_CMD_ASSOCIATE,
+- *    NL80211_CMD_DEAUTHENTICATE, and NL80211_CMD_DISASSOCIATE.
+- *
+- * @NL80211_CMD_GET_SCAN: get scan results
+- * @NL80211_CMD_TRIGGER_SCAN: trigger a new scan with the given parameters
+- * @NL80211_CMD_NEW_SCAN_RESULTS: scan notification (as a reply to
+- *    NL80211_CMD_GET_SCAN and on the "scan" multicast group)
+- * @NL80211_CMD_SCAN_ABORTED: scan was aborted, for unspecified reasons,
+- *    partial scan results may be available
+- *
+- * @NL80211_CMD_GET_SURVEY: get survey resuls, e.g. channel occupation
+- *      or noise level
+- * @NL80211_CMD_NEW_SURVEY_RESULTS: survey data notification (as a reply to
+- *    NL80211_CMD_GET_SURVEY and on the "scan" multicast group)
+- *
+- * @NL80211_CMD_REG_CHANGE: indicates to userspace the regulatory domain
+- *     has been changed and provides details of the request information
+- *     that caused the change such as who initiated the regulatory request
+- *     (%NL80211_ATTR_REG_INITIATOR), the wiphy_idx
+- *     (%NL80211_ATTR_REG_ALPHA2) on which the request was made from if
+- *     the initiator was %NL80211_REGDOM_SET_BY_COUNTRY_IE or
+- *     %NL80211_REGDOM_SET_BY_DRIVER, the type of regulatory domain
+- *     set (%NL80211_ATTR_REG_TYPE), if the type of regulatory domain is
+- *     %NL80211_REG_TYPE_COUNTRY the alpha2 to which we have moved on
+- *     to (%NL80211_ATTR_REG_ALPHA2).
+- * @NL80211_CMD_REG_BEACON_HINT: indicates to userspace that an AP beacon
+- *     has been found while world roaming thus enabling active scan or
+- *     any mode of operation that initiates TX (beacons) on a channel
+- *     where we would not have been able to do either before. As an example
+- *     if you are world roaming (regulatory domain set to world or if your
+- *     driver is using a custom world roaming regulatory domain) and while
+- *     doing a passive scan on the 5 GHz band you find an AP there (if not
+- *     on a DFS channel) you will now be able to actively scan for that AP
+- *     or use AP mode on your card on that same channel. Note that this will
+- *     never be used for channels 1-11 on the 2 GHz band as they are always
+- *     enabled world wide. This beacon hint is only sent if your device had
+- *     either disabled active scanning or beaconing on a channel. We send to
+- *     userspace the wiphy on which we removed a restriction from
+- *     (%NL80211_ATTR_WIPHY) and the channel on which this occurred
+- *     before (%NL80211_ATTR_FREQ_BEFORE) and after (%NL80211_ATTR_FREQ_AFTER)
+- *     the beacon hint was processed.
+- *
+- * @NL80211_CMD_AUTHENTICATE: authentication request and notification.
+- *    This command is used both as a command (request to authenticate) and
+- *    as an event on the "mlme" multicast group indicating completion of the
+- *    authentication process.
+- *    When used as a command, %NL80211_ATTR_IFINDEX is used to identify the
+- *    interface. %NL80211_ATTR_MAC is used to specify PeerSTAAddress (and
+- *    BSSID in case of station mode). %NL80211_ATTR_SSID is used to specify
+- *    the SSID (mainly for association, but is included in authentication
+- *    request, too, to help BSS selection. %NL80211_ATTR_WIPHY_FREQ is used
+- *    to specify the frequence of the channel in MHz. %NL80211_ATTR_AUTH_TYPE
+- *    is used to specify the authentication type. %NL80211_ATTR_IE is used to
+- *    define IEs (VendorSpecificInfo, but also including RSN IE and FT IEs)
+- *    to be added to the frame.
+- *    When used as an event, this reports reception of an Authentication
+- *    frame in station and IBSS modes when the local MLME processed the
+- *    frame, i.e., it was for the local STA and was received in correct
+- *    state. This is similar to MLME-AUTHENTICATE.confirm primitive in the
+- *    MLME SAP interface (kernel providing MLME, userspace SME). The
+- *    included %NL80211_ATTR_FRAME attribute contains the management frame
+- *    (including both the header and frame body, but not FCS). This event is
+- *    also used to indicate if the authentication attempt timed out. In that
+- *    case the %NL80211_ATTR_FRAME attribute is replaced with a
+- *    %NL80211_ATTR_TIMED_OUT flag (and %NL80211_ATTR_MAC to indicate which
+- *    pending authentication timed out).
+- * @NL80211_CMD_ASSOCIATE: association request and notification; like
+- *    NL80211_CMD_AUTHENTICATE but for Association and Reassociation
+- *    (similar to MLME-ASSOCIATE.request, MLME-REASSOCIATE.request,
+- *    MLME-ASSOCIATE.confirm or MLME-REASSOCIATE.confirm primitives).
+- * @NL80211_CMD_DEAUTHENTICATE: deauthentication request and notification; like
+- *    NL80211_CMD_AUTHENTICATE but for Deauthentication frames (similar to
+- *    MLME-DEAUTHENTICATION.request and MLME-DEAUTHENTICATE.indication
+- *    primitives).
+- * @NL80211_CMD_DISASSOCIATE: disassociation request and notification; like
+- *    NL80211_CMD_AUTHENTICATE but for Disassociation frames (similar to
+- *    MLME-DISASSOCIATE.request and MLME-DISASSOCIATE.indication primitives).
+- *
+- * @NL80211_CMD_MICHAEL_MIC_FAILURE: notification of a locally detected Michael
+- *    MIC (part of TKIP) failure; sent on the "mlme" multicast group; the
+- *    event includes %NL80211_ATTR_MAC to describe the source MAC address of
+- *    the frame with invalid MIC, %NL80211_ATTR_KEY_TYPE to show the key
+- *    type, %NL80211_ATTR_KEY_IDX to indicate the key identifier, and
+- *    %NL80211_ATTR_KEY_SEQ to indicate the TSC value of the frame; this
+- *    event matches with MLME-MICHAELMICFAILURE.indication() primitive
+- *
+- * @NL80211_CMD_JOIN_IBSS: Join a new IBSS -- given at least an SSID and a
+- *    FREQ attribute (for the initial frequency if no peer can be found)
+- *    and optionally a MAC (as BSSID) and FREQ_FIXED attribute if those
+- *    should be fixed rather than automatically determined. Can only be
+- *    executed on a network interface that is UP, and fixed BSSID/FREQ
+- *    may be rejected. Another optional parameter is the beacon interval,
+- *    given in the %NL80211_ATTR_BEACON_INTERVAL attribute, which if not
+- *    given defaults to 100 TU (102.4ms).
+- * @NL80211_CMD_LEAVE_IBSS: Leave the IBSS -- no special arguments, the IBSS is
+- *    determined by the network interface.
+- *
+- * @NL80211_CMD_TESTMODE: testmode command, takes a wiphy (or ifindex) attribute
+- *    to identify the device, and the TESTDATA blob attribute to pass through
+- *    to the driver.
+- *
+- * @NL80211_CMD_CONNECT: connection request and notification; this command
+- *    requests to connect to a specified network but without separating
+- *    auth and assoc steps. For this, you need to specify the SSID in a
+- *    %NL80211_ATTR_SSID attribute, and can optionally specify the association
+- *    IEs in %NL80211_ATTR_IE, %NL80211_ATTR_AUTH_TYPE, %NL80211_ATTR_MAC,
+- *    %NL80211_ATTR_WIPHY_FREQ, %NL80211_ATTR_CONTROL_PORT,
+- *    %NL80211_ATTR_CONTROL_PORT_ETHERTYPE and
+- *    %NL80211_ATTR_CONTROL_PORT_NO_ENCRYPT.
+- *    It is also sent as an event, with the BSSID and response IEs when the
+- *    connection is established or failed to be established. This can be
+- *    determined by the STATUS_CODE attribute.
+- * @NL80211_CMD_ROAM: request that the card roam (currently not implemented),
+- *    sent as an event when the card/driver roamed by itself.
+- * @NL80211_CMD_DISCONNECT: drop a given connection; also used to notify
+- *    userspace that a connection was dropped by the AP or due to other
+- *    reasons, for this the %NL80211_ATTR_DISCONNECTED_BY_AP and
+- *    %NL80211_ATTR_REASON_CODE attributes are used.
+- *
+- * @NL80211_CMD_SET_WIPHY_NETNS: Set a wiphy's netns. Note that all devices
+- *    associated with this wiphy must be down and will follow.
+- *
+- * @NL80211_CMD_REMAIN_ON_CHANNEL: Request to remain awake on the specified
+- *    channel for the specified amount of time. This can be used to do
+- *    off-channel operations like transmit a Public Action frame and wait for
+- *    a response while being associated to an AP on another channel.
+- *    %NL80211_ATTR_IFINDEX is used to specify which interface (and thus
+- *    radio) is used. %NL80211_ATTR_WIPHY_FREQ is used to specify the
+- *    frequency for the operation and %NL80211_ATTR_WIPHY_CHANNEL_TYPE may be
+- *    optionally used to specify additional channel parameters.
+- *    %NL80211_ATTR_DURATION is used to specify the duration in milliseconds
+- *    to remain on the channel. This command is also used as an event to
+- *    notify when the requested duration starts (it may take a while for the
+- *    driver to schedule this time due to other concurrent needs for the
+- *    radio).
+- *    When called, this operation returns a cookie (%NL80211_ATTR_COOKIE)
+- *    that will be included with any events pertaining to this request;
+- *    the cookie is also used to cancel the request.
+- * @NL80211_CMD_CANCEL_REMAIN_ON_CHANNEL: This command can be used to cancel a
+- *    pending remain-on-channel duration if the desired operation has been
+- *    completed prior to expiration of the originally requested duration.
+- *    %NL80211_ATTR_WIPHY or %NL80211_ATTR_IFINDEX is used to specify the
+- *    radio. The %NL80211_ATTR_COOKIE attribute must be given as well to
+- *    uniquely identify the request.
+- *    This command is also used as an event to notify when a requested
+- *    remain-on-channel duration has expired.
+- *
+- * @NL80211_CMD_SET_TX_BITRATE_MASK: Set the mask of rates to be used in TX
+- *    rate selection. %NL80211_ATTR_IFINDEX is used to specify the interface
+- *    and @NL80211_ATTR_TX_RATES the set of allowed rates.
+- *
+- * @NL80211_CMD_REGISTER_FRAME: Register for receiving certain mgmt frames
+- *    (via @NL80211_CMD_FRAME) for processing in userspace. This command
+- *    requires an interface index, a frame type attribute (optional for
+- *    backward compatibility reasons, if not given assumes action frames)
+- *    and a match attribute containing the first few bytes of the frame
+- *    that should match, e.g. a single byte for only a category match or
+- *    four bytes for vendor frames including the OUI. The registration
+- *    cannot be dropped, but is removed automatically when the netlink
+- *    socket is closed. Multiple registrations can be made.
+- * @NL80211_CMD_REGISTER_ACTION: Alias for @NL80211_CMD_REGISTER_FRAME for
+- *    backward compatibility
+- * @NL80211_CMD_FRAME: Management frame TX request and RX notification. This
+- *    command is used both as a request to transmit a management frame and
+- *    as an event indicating reception of a frame that was not processed in
+- *    kernel code, but is for us (i.e., which may need to be processed in a
+- *    user space application). %NL80211_ATTR_FRAME is used to specify the
+- *    frame contents (including header). %NL80211_ATTR_WIPHY_FREQ (and
+- *    optionally %NL80211_ATTR_WIPHY_CHANNEL_TYPE) is used to indicate on
+- *    which channel the frame is to be transmitted or was received. This
+- *    channel has to be the current channel (remain-on-channel or the
+- *    operational channel). When called, this operation returns a cookie
+- *    (%NL80211_ATTR_COOKIE) that will be included with the TX status event
+- *    pertaining to the TX request.
+- * @NL80211_CMD_ACTION: Alias for @NL80211_CMD_FRAME for backward compatibility.
+- * @NL80211_CMD_FRAME_TX_STATUS: Report TX status of a management frame
+- *    transmitted with %NL80211_CMD_FRAME. %NL80211_ATTR_COOKIE identifies
+- *    the TX command and %NL80211_ATTR_FRAME includes the contents of the
+- *    frame. %NL80211_ATTR_ACK flag is included if the recipient acknowledged
+- *    the frame.
+- * @NL80211_CMD_ACTION_TX_STATUS: Alias for @NL80211_CMD_FRAME_TX_STATUS for
+- *    backward compatibility.
+- * @NL80211_CMD_SET_CQM: Connection quality monitor configuration. This command
+- *    is used to configure connection quality monitoring notification trigger
+- *    levels.
+- * @NL80211_CMD_NOTIFY_CQM: Connection quality monitor notification. This
+- *    command is used as an event to indicate the that a trigger level was
+- *    reached.
+- * @NL80211_CMD_SET_CHANNEL: Set the channel (using %NL80211_ATTR_WIPHY_FREQ
+- *    and %NL80211_ATTR_WIPHY_CHANNEL_TYPE) the given interface (identifed
+- *    by %NL80211_ATTR_IFINDEX) shall operate on.
+- *    In case multiple channels are supported by the device, the mechanism
+- *    with which it switches channels is implementation-defined.
+- *    When a monitor interface is given, it can only switch channel while
+- *    no other interfaces are operating to avoid disturbing the operation
+- *    of any other interfaces, and other interfaces will again take
+- *    precedence when they are used.
+- *
+- * @NL80211_CMD_SET_WDS_PEER: Set the MAC address of the peer on a WDS interface.
+- *
+- * @NL80211_CMD_MAX: highest used command number
+- * @__NL80211_CMD_AFTER_LAST: internal use
+- */
+-enum nl80211_commands {
+-/* don't change the order or add anything inbetween, this is ABI! */
+-    NL80211_CMD_UNSPEC,
+-
+-    NL80211_CMD_GET_WIPHY,        /* can dump */
+-    NL80211_CMD_SET_WIPHY,
+-    NL80211_CMD_NEW_WIPHY,
+-    NL80211_CMD_DEL_WIPHY,
+-
+-    NL80211_CMD_GET_INTERFACE,    /* can dump */
+-    NL80211_CMD_SET_INTERFACE,
+-    NL80211_CMD_NEW_INTERFACE,
+-    NL80211_CMD_DEL_INTERFACE,
+-
+-    NL80211_CMD_GET_KEY,
+-    NL80211_CMD_SET_KEY,
+-    NL80211_CMD_NEW_KEY,
+-    NL80211_CMD_DEL_KEY,
+-
+-    NL80211_CMD_GET_BEACON,
+-    NL80211_CMD_SET_BEACON,
+-    NL80211_CMD_NEW_BEACON,
+-    NL80211_CMD_DEL_BEACON,
+-
+-    NL80211_CMD_GET_STATION,
+-    NL80211_CMD_SET_STATION,
+-    NL80211_CMD_NEW_STATION,
+-    NL80211_CMD_DEL_STATION,
+-
+-    NL80211_CMD_GET_MPATH,
+-    NL80211_CMD_SET_MPATH,
+-    NL80211_CMD_NEW_MPATH,
+-    NL80211_CMD_DEL_MPATH,
+-
+-    NL80211_CMD_SET_BSS,
+-
+-    NL80211_CMD_SET_REG,
+-    NL80211_CMD_REQ_SET_REG,
+-
+-    NL80211_CMD_GET_MESH_PARAMS,
+-    NL80211_CMD_SET_MESH_PARAMS,
+-
+-    NL80211_CMD_SET_MGMT_EXTRA_IE /* reserved; not used */,
+-
+-    NL80211_CMD_GET_REG,
+-
+-    NL80211_CMD_GET_SCAN,
+-    NL80211_CMD_TRIGGER_SCAN,
+-    NL80211_CMD_NEW_SCAN_RESULTS,
+-    NL80211_CMD_SCAN_ABORTED,
+-
+-    NL80211_CMD_REG_CHANGE,
+-
+-    NL80211_CMD_AUTHENTICATE,
+-    NL80211_CMD_ASSOCIATE,
+-    NL80211_CMD_DEAUTHENTICATE,
+-    NL80211_CMD_DISASSOCIATE,
+-
+-    NL80211_CMD_MICHAEL_MIC_FAILURE,
+-
+-    NL80211_CMD_REG_BEACON_HINT,
+-
+-    NL80211_CMD_JOIN_IBSS,
+-    NL80211_CMD_LEAVE_IBSS,
+-
+-    NL80211_CMD_TESTMODE,
+-
+-    NL80211_CMD_CONNECT,
+-    NL80211_CMD_ROAM,
+-    NL80211_CMD_DISCONNECT,
+-
+-    NL80211_CMD_SET_WIPHY_NETNS,
+-
+-    NL80211_CMD_GET_SURVEY,
+-    NL80211_CMD_NEW_SURVEY_RESULTS,
+-
+-    NL80211_CMD_SET_PMKSA,
+-    NL80211_CMD_DEL_PMKSA,
+-    NL80211_CMD_FLUSH_PMKSA,
+-
+-    NL80211_CMD_REMAIN_ON_CHANNEL,
+-    NL80211_CMD_CANCEL_REMAIN_ON_CHANNEL,
+-
+-    NL80211_CMD_SET_TX_BITRATE_MASK,
+-
+-    NL80211_CMD_REGISTER_FRAME,
+-    NL80211_CMD_REGISTER_ACTION = NL80211_CMD_REGISTER_FRAME,
+-    NL80211_CMD_FRAME,
+-    NL80211_CMD_ACTION = NL80211_CMD_FRAME,
+-    NL80211_CMD_FRAME_TX_STATUS,
+-    NL80211_CMD_ACTION_TX_STATUS = NL80211_CMD_FRAME_TX_STATUS,
+-
+-    NL80211_CMD_SET_POWER_SAVE,
+-    NL80211_CMD_GET_POWER_SAVE,
+-
+-    NL80211_CMD_SET_CQM,
+-    NL80211_CMD_NOTIFY_CQM,
+-
+-    NL80211_CMD_SET_CHANNEL,
+-    NL80211_CMD_SET_WDS_PEER,
+-
+-    /* add new commands above here */
+-
+-    /* used to define NL80211_CMD_MAX below */
+-    __NL80211_CMD_AFTER_LAST,
+-    NL80211_CMD_MAX = __NL80211_CMD_AFTER_LAST - 1
+-};
+-
+-/*
+- * Allow user space programs to use #ifdef on new commands by defining them
+- * here
+- */
+-#define NL80211_CMD_SET_BSS NL80211_CMD_SET_BSS
+-#define NL80211_CMD_SET_MGMT_EXTRA_IE NL80211_CMD_SET_MGMT_EXTRA_IE
+-#define NL80211_CMD_REG_CHANGE NL80211_CMD_REG_CHANGE
+-#define NL80211_CMD_AUTHENTICATE NL80211_CMD_AUTHENTICATE
+-#define NL80211_CMD_ASSOCIATE NL80211_CMD_ASSOCIATE
+-#define NL80211_CMD_DEAUTHENTICATE NL80211_CMD_DEAUTHENTICATE
+-#define NL80211_CMD_DISASSOCIATE NL80211_CMD_DISASSOCIATE
+-#define NL80211_CMD_REG_BEACON_HINT NL80211_CMD_REG_BEACON_HINT
+-
+-/**
+- * enum nl80211_attrs - nl80211 netlink attributes
+- *
+- * @NL80211_ATTR_UNSPEC: unspecified attribute to catch errors
+- *
+- * @NL80211_ATTR_WIPHY: index of wiphy to operate on, cf.
+- *    /sys/class/ieee80211/<phyname>/index
+- * @NL80211_ATTR_WIPHY_NAME: wiphy name (used for renaming)
+- * @NL80211_ATTR_WIPHY_TXQ_PARAMS: a nested array of TX queue parameters
+- * @NL80211_ATTR_WIPHY_FREQ: frequency of the selected channel in MHz
+- * @NL80211_ATTR_WIPHY_CHANNEL_TYPE: included with NL80211_ATTR_WIPHY_FREQ
+- *    if HT20 or HT40 are allowed (i.e., 802.11n disabled if not included):
+- *    NL80211_CHAN_NO_HT = HT not allowed (i.e., same as not including
+- *        this attribute)
+- *    NL80211_CHAN_HT20 = HT20 only
+- *    NL80211_CHAN_HT40MINUS = secondary channel is below the primary channel
+- *    NL80211_CHAN_HT40PLUS = secondary channel is above the primary channel
+- * @NL80211_ATTR_WIPHY_RETRY_SHORT: TX retry limit for frames whose length is
+- *    less than or equal to the RTS threshold; allowed range: 1..255;
+- *    dot11ShortRetryLimit; u8
+- * @NL80211_ATTR_WIPHY_RETRY_LONG: TX retry limit for frames whose length is
+- *    greater than the RTS threshold; allowed range: 1..255;
+- *    dot11ShortLongLimit; u8
+- * @NL80211_ATTR_WIPHY_FRAG_THRESHOLD: fragmentation threshold, i.e., maximum
+- *    length in octets for frames; allowed range: 256..8000, disable
+- *    fragmentation with (u32)-1; dot11FragmentationThreshold; u32
+- * @NL80211_ATTR_WIPHY_RTS_THRESHOLD: RTS threshold (TX frames with length
+- *    larger than or equal to this use RTS/CTS handshake); allowed range:
+- *    0..65536, disable with (u32)-1; dot11RTSThreshold; u32
+- * @NL80211_ATTR_WIPHY_COVERAGE_CLASS: Coverage Class as defined by IEEE 802.11
+- *    section 7.3.2.9; dot11CoverageClass; u8
+- *
+- * @NL80211_ATTR_IFINDEX: network interface index of the device to operate on
+- * @NL80211_ATTR_IFNAME: network interface name
+- * @NL80211_ATTR_IFTYPE: type of virtual interface, see &enum nl80211_iftype
+- *
+- * @NL80211_ATTR_MAC: MAC address (various uses)
+- *
+- * @NL80211_ATTR_KEY_DATA: (temporal) key data; for TKIP this consists of
+- *    16 bytes encryption key followed by 8 bytes each for TX and RX MIC
+- *    keys
+- * @NL80211_ATTR_KEY_IDX: key ID (u8, 0-3)
+- * @NL80211_ATTR_KEY_CIPHER: key cipher suite (u32, as defined by IEEE 802.11
+- *    section 7.3.2.25.1, e.g. 0x000FAC04)
+- * @NL80211_ATTR_KEY_SEQ: transmit key sequence number (IV/PN) for TKIP and
+- *    CCMP keys, each six bytes in little endian
+- *
+- * @NL80211_ATTR_BEACON_INTERVAL: beacon interval in TU
+- * @NL80211_ATTR_DTIM_PERIOD: DTIM period for beaconing
+- * @NL80211_ATTR_BEACON_HEAD: portion of the beacon before the TIM IE
+- * @NL80211_ATTR_BEACON_TAIL: portion of the beacon after the TIM IE
+- *
+- * @NL80211_ATTR_STA_AID: Association ID for the station (u16)
+- * @NL80211_ATTR_STA_FLAGS: flags, nested element with NLA_FLAG attributes of
+- *    &enum nl80211_sta_flags (deprecated, use %NL80211_ATTR_STA_FLAGS2)
+- * @NL80211_ATTR_STA_LISTEN_INTERVAL: listen interval as defined by
+- *    IEEE 802.11 7.3.1.6 (u16).
+- * @NL80211_ATTR_STA_SUPPORTED_RATES: supported rates, array of supported
+- *    rates as defined by IEEE 802.11 7.3.2.2 but without the length
+- *    restriction (at most %NL80211_MAX_SUPP_RATES).
+- * @NL80211_ATTR_STA_VLAN: interface index of VLAN interface to move station
+- *    to, or the AP interface the station was originally added to to.
+- * @NL80211_ATTR_STA_INFO: information about a station, part of station info
+- *    given for %NL80211_CMD_GET_STATION, nested attribute containing
+- *    info as possible, see &enum nl80211_sta_info.
+- *
+- * @NL80211_ATTR_WIPHY_BANDS: Information about an operating bands,
+- *    consisting of a nested array.
+- *
+- * @NL80211_ATTR_MESH_ID: mesh id (1-32 bytes).
+- * @NL80211_ATTR_PLINK_ACTION: action to perform on the mesh peer link.
+- * @NL80211_ATTR_MPATH_NEXT_HOP: MAC address of the next hop for a mesh path.
+- * @NL80211_ATTR_MPATH_INFO: information about a mesh_path, part of mesh path
+- *     info given for %NL80211_CMD_GET_MPATH, nested attribute described at
+- *    &enum nl80211_mpath_info.
+- *
+- * @NL80211_ATTR_MNTR_FLAGS: flags, nested element with NLA_FLAG attributes of
+- *      &enum nl80211_mntr_flags.
+- *
+- * @NL80211_ATTR_REG_ALPHA2: an ISO-3166-alpha2 country code for which the
+- *     current regulatory domain should be set to or is already set to.
+- *     For example, 'CR', for Costa Rica. This attribute is used by the kernel
+- *     to query the CRDA to retrieve one regulatory domain. This attribute can
+- *     also be used by userspace to query the kernel for the currently set
+- *     regulatory domain. We chose an alpha2 as that is also used by the
+- *     IEEE-802.11d country information element to identify a country.
+- *     Users can also simply ask the wireless core to set regulatory domain
+- *     to a specific alpha2.
+- * @NL80211_ATTR_REG_RULES: a nested array of regulatory domain regulatory
+- *    rules.
+- *
+- * @NL80211_ATTR_BSS_CTS_PROT: whether CTS protection is enabled (u8, 0 or 1)
+- * @NL80211_ATTR_BSS_SHORT_PREAMBLE: whether short preamble is enabled
+- *    (u8, 0 or 1)
+- * @NL80211_ATTR_BSS_SHORT_SLOT_TIME: whether short slot time enabled
+- *    (u8, 0 or 1)
+- * @NL80211_ATTR_BSS_BASIC_RATES: basic rates, array of basic
+- *    rates in format defined by IEEE 802.11 7.3.2.2 but without the length
+- *    restriction (at most %NL80211_MAX_SUPP_RATES).
+- *
+- * @NL80211_ATTR_HT_CAPABILITY: HT Capability information element (from
+- *    association request when used with NL80211_CMD_NEW_STATION)
+- *
+- * @NL80211_ATTR_SUPPORTED_IFTYPES: nested attribute containing all
+- *    supported interface types, each a flag attribute with the number
+- *    of the interface mode.
+- *
+- * @NL80211_ATTR_MGMT_SUBTYPE: Management frame subtype for
+- *    %NL80211_CMD_SET_MGMT_EXTRA_IE.
+- *
+- * @NL80211_ATTR_IE: Information element(s) data (used, e.g., with
+- *    %NL80211_CMD_SET_MGMT_EXTRA_IE).
+- *
+- * @NL80211_ATTR_MAX_NUM_SCAN_SSIDS: number of SSIDs you can scan with
+- *    a single scan request, a wiphy attribute.
+- * @NL80211_ATTR_MAX_SCAN_IE_LEN: maximum length of information elements
+- *    that can be added to a scan request
+- *
+- * @NL80211_ATTR_SCAN_FREQUENCIES: nested attribute with frequencies (in MHz)
+- * @NL80211_ATTR_SCAN_SSIDS: nested attribute with SSIDs, leave out for passive
+- *    scanning and include a zero-length SSID (wildcard) for wildcard scan
+- * @NL80211_ATTR_BSS: scan result BSS
+- *
+- * @NL80211_ATTR_REG_INITIATOR: indicates who requested the regulatory domain
+- *     currently in effect. This could be any of the %NL80211_REGDOM_SET_BY_*
+- * @NL80211_ATTR_REG_TYPE: indicates the type of the regulatory domain currently
+- *     set. This can be one of the nl80211_reg_type (%NL80211_REGDOM_TYPE_*)
+- *
+- * @NL80211_ATTR_SUPPORTED_COMMANDS: wiphy attribute that specifies
+- *    an array of command numbers (i.e. a mapping index to command number)
+- *    that the driver for the given wiphy supports.
+- *
+- * @NL80211_ATTR_FRAME: frame data (binary attribute), including frame header
+- *    and body, but not FCS; used, e.g., with NL80211_CMD_AUTHENTICATE and
+- *    NL80211_CMD_ASSOCIATE events
+- * @NL80211_ATTR_SSID: SSID (binary attribute, 0..32 octets)
+- * @NL80211_ATTR_AUTH_TYPE: AuthenticationType, see &enum nl80211_auth_type,
+- *    represented as a u32
+- * @NL80211_ATTR_REASON_CODE: ReasonCode for %NL80211_CMD_DEAUTHENTICATE and
+- *    %NL80211_CMD_DISASSOCIATE, u16
+- *
+- * @NL80211_ATTR_KEY_TYPE: Key Type, see &enum nl80211_key_type, represented as
+- *    a u32
+- *
+- * @NL80211_ATTR_FREQ_BEFORE: A channel which has suffered a regulatory change
+- *     due to considerations from a beacon hint. This attribute reflects
+- *     the state of the channel _before_ the beacon hint processing. This
+- *     attributes consists of a nested attribute containing
+- *     NL80211_FREQUENCY_ATTR_*
+- * @NL80211_ATTR_FREQ_AFTER: A channel which has suffered a regulatory change
+- *     due to considerations from a beacon hint. This attribute reflects
+- *     the state of the channel _after_ the beacon hint processing. This
+- *     attributes consists of a nested attribute containing
+- *     NL80211_FREQUENCY_ATTR_*
+- *
+- * @NL80211_ATTR_CIPHER_SUITES: a set of u32 values indicating the supported
+- *    cipher suites
+- *
+- * @NL80211_ATTR_FREQ_FIXED: a flag indicating the IBSS should not try to look
+- *    for other networks on different channels
+- *
+- * @NL80211_ATTR_TIMED_OUT: a flag indicating than an operation timed out; this
+- *    is used, e.g., with %NL80211_CMD_AUTHENTICATE event
+- *
+- * @NL80211_ATTR_USE_MFP: Whether management frame protection (IEEE 802.11w) is
+- *    used for the association (&enum nl80211_mfp, represented as a u32);
+- *    this attribute can be used
+- *    with %NL80211_CMD_ASSOCIATE request
+- *
+- * @NL80211_ATTR_STA_FLAGS2: Attribute containing a
+- *    &struct nl80211_sta_flag_update.
+- *
+- * @NL80211_ATTR_CONTROL_PORT: A flag indicating whether user space controls
+- *    IEEE 802.1X port, i.e., sets/clears %NL80211_STA_FLAG_AUTHORIZED, in
+- *    station mode. If the flag is included in %NL80211_CMD_ASSOCIATE
+- *    request, the driver will assume that the port is unauthorized until
+- *    authorized by user space. Otherwise, port is marked authorized by
+- *    default in station mode.
+- * @NL80211_ATTR_CONTROL_PORT_ETHERTYPE: A 16-bit value indicating the
+- *    ethertype that will be used for key negotiation. It can be
+- *    specified with the associate and connect commands. If it is not
+- *    specified, the value defaults to 0x888E (PAE, 802.1X). This
+- *    attribute is also used as a flag in the wiphy information to
+- *    indicate that protocols other than PAE are supported.
+- * @NL80211_ATTR_CONTROL_PORT_NO_ENCRYPT: When included along with
+- *    %NL80211_ATTR_CONTROL_PORT_ETHERTYPE, indicates that the custom
+- *    ethertype frames used for key negotiation must not be encrypted.
+- *
+- * @NL80211_ATTR_TESTDATA: Testmode data blob, passed through to the driver.
+- *    We recommend using nested, driver-specific attributes within this.
+- *
+- * @NL80211_ATTR_DISCONNECTED_BY_AP: A flag indicating that the DISCONNECT
+- *    event was due to the AP disconnecting the station, and not due to
+- *    a local disconnect request.
+- * @NL80211_ATTR_STATUS_CODE: StatusCode for the %NL80211_CMD_CONNECT
+- *    event (u16)
+- * @NL80211_ATTR_PRIVACY: Flag attribute, used with connect(), indicating
+- *    that protected APs should be used.
+- *
+- * @NL80211_ATTR_CIPHERS_PAIRWISE: Used with CONNECT and ASSOCIATE to
+- *    indicate which unicast key ciphers will be used with the connection
+- *    (an array of u32).
+- * @NL80211_ATTR_CIPHER_GROUP: Used with CONNECT and ASSOCIATE to indicate
+- *    which group key cipher will be used with the connection (a u32).
+- * @NL80211_ATTR_WPA_VERSIONS: Used with CONNECT and ASSOCIATE to indicate
+- *    which WPA version(s) the AP we want to associate with is using
+- *    (a u32 with flags from &enum nl80211_wpa_versions).
+- * @NL80211_ATTR_AKM_SUITES: Used with CONNECT and ASSOCIATE to indicate
+- *    which key management algorithm(s) to use (an array of u32).
+- *
+- * @NL80211_ATTR_REQ_IE: (Re)association request information elements as
+- *    sent out by the card, for ROAM and successful CONNECT events.
+- * @NL80211_ATTR_RESP_IE: (Re)association response information elements as
+- *    sent by peer, for ROAM and successful CONNECT events.
+- *
+- * @NL80211_ATTR_PREV_BSSID: previous BSSID, to be used by in ASSOCIATE
+- *    commands to specify using a reassociate frame
+- *
+- * @NL80211_ATTR_KEY: key information in a nested attribute with
+- *    %NL80211_KEY_* sub-attributes
+- * @NL80211_ATTR_KEYS: array of keys for static WEP keys for connect()
+- *    and join_ibss(), key information is in a nested attribute each
+- *    with %NL80211_KEY_* sub-attributes
+- *
+- * @NL80211_ATTR_PID: Process ID of a network namespace.
+- *
+- * @NL80211_ATTR_GENERATION: Used to indicate consistent snapshots for
+- *    dumps. This number increases whenever the object list being
+- *    dumped changes, and as such userspace can verify that it has
+- *    obtained a complete and consistent snapshot by verifying that
+- *    all dump messages contain the same generation number. If it
+- *    changed then the list changed and the dump should be repeated
+- *    completely from scratch.
+- *
+- * @NL80211_ATTR_4ADDR: Use 4-address frames on a virtual interface
+- *
+- * @NL80211_ATTR_SURVEY_INFO: survey information about a channel, part of
+- *      the survey response for %NL80211_CMD_GET_SURVEY, nested attribute
+- *      containing info as possible, see &enum survey_info.
+- *
+- * @NL80211_ATTR_PMKID: PMK material for PMKSA caching.
+- * @NL80211_ATTR_MAX_NUM_PMKIDS: maximum number of PMKIDs a firmware can
+- *    cache, a wiphy attribute.
+- *
+- * @NL80211_ATTR_DURATION: Duration of an operation in milliseconds, u32.
+- *
+- * @NL80211_ATTR_COOKIE: Generic 64-bit cookie to identify objects.
+- *
+- * @NL80211_ATTR_TX_RATES: Nested set of attributes
+- *    (enum nl80211_tx_rate_attributes) describing TX rates per band. The
+- *    enum nl80211_band value is used as the index (nla_type() of the nested
+- *    data. If a band is not included, it will be configured to allow all
+- *    rates based on negotiated supported rates information. This attribute
+- *    is used with %NL80211_CMD_SET_TX_BITRATE_MASK.
+- *
+- * @NL80211_ATTR_FRAME_MATCH: A binary attribute which typically must contain
+- *    at least one byte, currently used with @NL80211_CMD_REGISTER_FRAME.
+- * @NL80211_ATTR_FRAME_TYPE: A u16 indicating the frame type/subtype for the
+- *    @NL80211_CMD_REGISTER_FRAME command.
+- * @NL80211_ATTR_TX_FRAME_TYPES: wiphy capability attribute, which is a
+- *    nested attribute of %NL80211_ATTR_FRAME_TYPE attributes, containing
+- *    information about which frame types can be transmitted with
+- *    %NL80211_CMD_FRAME.
+- * @NL80211_ATTR_RX_FRAME_TYPES: wiphy capability attribute, which is a
+- *    nested attribute of %NL80211_ATTR_FRAME_TYPE attributes, containing
+- *    information about which frame types can be registered for RX.
+- *
+- * @NL80211_ATTR_ACK: Flag attribute indicating that the frame was
+- *    acknowledged by the recipient.
+- *
+- * @NL80211_ATTR_CQM: connection quality monitor configuration in a
+- *    nested attribute with %NL80211_ATTR_CQM_* sub-attributes.
+- *
+- * @NL80211_ATTR_LOCAL_STATE_CHANGE: Flag attribute to indicate that a command
+- *    is requesting a local authentication/association state change without
+- *    invoking actual management frame exchange. This can be used with
+- *    NL80211_CMD_AUTHENTICATE, NL80211_CMD_DEAUTHENTICATE,
+- *    NL80211_CMD_DISASSOCIATE.
+- *
+- * @NL80211_ATTR_AP_ISOLATE: (AP mode) Do not forward traffic between stations
+- *    connected to this BSS.
+- *
+- * @NL80211_ATTR_WIPHY_TX_POWER_SETTING: Transmit power setting type. See
+- *      &enum nl80211_tx_power_setting for possible values.
+- * @NL80211_ATTR_WIPHY_TX_POWER_LEVEL: Transmit power level in signed mBm units.
+- *      This is used in association with @NL80211_ATTR_WIPHY_TX_POWER_SETTING
+- *      for non-automatic settings.
+- *
+- * @NL80211_ATTR_SUPPORT_IBSS_RSN: The device supports IBSS RSN, which mostly
+- *    means support for per-station GTKs.
+- *
+- * @NL80211_ATTR_MAX: highest attribute number currently defined
+- * @__NL80211_ATTR_AFTER_LAST: internal use
+- */
+-enum nl80211_attrs {
+-/* don't change the order or add anything inbetween, this is ABI! */
+-    NL80211_ATTR_UNSPEC,
+-
+-    NL80211_ATTR_WIPHY,
+-    NL80211_ATTR_WIPHY_NAME,
+-
+-    NL80211_ATTR_IFINDEX,
+-    NL80211_ATTR_IFNAME,
+-    NL80211_ATTR_IFTYPE,
+-
+-    NL80211_ATTR_MAC,
+-
+-    NL80211_ATTR_KEY_DATA,
+-    NL80211_ATTR_KEY_IDX,
+-    NL80211_ATTR_KEY_CIPHER,
+-    NL80211_ATTR_KEY_SEQ,
+-    NL80211_ATTR_KEY_DEFAULT,
+-
+-    NL80211_ATTR_BEACON_INTERVAL,
+-    NL80211_ATTR_DTIM_PERIOD,
+-    NL80211_ATTR_BEACON_HEAD,
+-    NL80211_ATTR_BEACON_TAIL,
+-
+-    NL80211_ATTR_STA_AID,
+-    NL80211_ATTR_STA_FLAGS,
+-    NL80211_ATTR_STA_LISTEN_INTERVAL,
+-    NL80211_ATTR_STA_SUPPORTED_RATES,
+-    NL80211_ATTR_STA_VLAN,
+-    NL80211_ATTR_STA_INFO,
+-
+-    NL80211_ATTR_WIPHY_BANDS,
+-
+-    NL80211_ATTR_MNTR_FLAGS,
+-
+-    NL80211_ATTR_MESH_ID,
+-    NL80211_ATTR_STA_PLINK_ACTION,
+-    NL80211_ATTR_MPATH_NEXT_HOP,
+-    NL80211_ATTR_MPATH_INFO,
+-
+-    NL80211_ATTR_BSS_CTS_PROT,
+-    NL80211_ATTR_BSS_SHORT_PREAMBLE,
+-    NL80211_ATTR_BSS_SHORT_SLOT_TIME,
+-
+-    NL80211_ATTR_HT_CAPABILITY,
+-
+-    NL80211_ATTR_SUPPORTED_IFTYPES,
+-
+-    NL80211_ATTR_REG_ALPHA2,
+-    NL80211_ATTR_REG_RULES,
+-
+-    NL80211_ATTR_MESH_PARAMS,
+-
+-    NL80211_ATTR_BSS_BASIC_RATES,
+-
+-    NL80211_ATTR_WIPHY_TXQ_PARAMS,
+-    NL80211_ATTR_WIPHY_FREQ,
+-    NL80211_ATTR_WIPHY_CHANNEL_TYPE,
+-
+-    NL80211_ATTR_KEY_DEFAULT_MGMT,
+-
+-    NL80211_ATTR_MGMT_SUBTYPE,
+-    NL80211_ATTR_IE,
+-
+-    NL80211_ATTR_MAX_NUM_SCAN_SSIDS,
+-
+-    NL80211_ATTR_SCAN_FREQUENCIES,
+-    NL80211_ATTR_SCAN_SSIDS,
+-    NL80211_ATTR_GENERATION, /* replaces old SCAN_GENERATION */
+-    NL80211_ATTR_BSS,
+-
+-    NL80211_ATTR_REG_INITIATOR,
+-    NL80211_ATTR_REG_TYPE,
+-
+-    NL80211_ATTR_SUPPORTED_COMMANDS,
+-
+-    NL80211_ATTR_FRAME,
+-    NL80211_ATTR_SSID,
+-    NL80211_ATTR_AUTH_TYPE,
+-    NL80211_ATTR_REASON_CODE,
+-
+-    NL80211_ATTR_KEY_TYPE,
+-
+-    NL80211_ATTR_MAX_SCAN_IE_LEN,
+-    NL80211_ATTR_CIPHER_SUITES,
+-
+-    NL80211_ATTR_FREQ_BEFORE,
+-    NL80211_ATTR_FREQ_AFTER,
+-
+-    NL80211_ATTR_FREQ_FIXED,
+-
+-
+-    NL80211_ATTR_WIPHY_RETRY_SHORT,
+-    NL80211_ATTR_WIPHY_RETRY_LONG,
+-    NL80211_ATTR_WIPHY_FRAG_THRESHOLD,
+-    NL80211_ATTR_WIPHY_RTS_THRESHOLD,
+-
+-    NL80211_ATTR_TIMED_OUT,
+-
+-    NL80211_ATTR_USE_MFP,
+-
+-    NL80211_ATTR_STA_FLAGS2,
+-
+-    NL80211_ATTR_CONTROL_PORT,
+-
+-    NL80211_ATTR_TESTDATA,
+-
+-    NL80211_ATTR_PRIVACY,
+-
+-    NL80211_ATTR_DISCONNECTED_BY_AP,
+-    NL80211_ATTR_STATUS_CODE,
+-
+-    NL80211_ATTR_CIPHER_SUITES_PAIRWISE,
+-    NL80211_ATTR_CIPHER_SUITE_GROUP,
+-    NL80211_ATTR_WPA_VERSIONS,
+-    NL80211_ATTR_AKM_SUITES,
+-
+-    NL80211_ATTR_REQ_IE,
+-    NL80211_ATTR_RESP_IE,
+-
+-    NL80211_ATTR_PREV_BSSID,
+-
+-    NL80211_ATTR_KEY,
+-    NL80211_ATTR_KEYS,
+-
+-    NL80211_ATTR_PID,
+-
+-    NL80211_ATTR_4ADDR,
+-
+-    NL80211_ATTR_SURVEY_INFO,
+-
+-    NL80211_ATTR_PMKID,
+-    NL80211_ATTR_MAX_NUM_PMKIDS,
+-
+-    NL80211_ATTR_DURATION,
+-
+-    NL80211_ATTR_COOKIE,
+-
+-    NL80211_ATTR_WIPHY_COVERAGE_CLASS,
+-
+-    NL80211_ATTR_TX_RATES,
+-
+-    NL80211_ATTR_FRAME_MATCH,
+-
+-    NL80211_ATTR_ACK,
+-
+-    NL80211_ATTR_PS_STATE,
+-
+-    NL80211_ATTR_CQM,
+-
+-    NL80211_ATTR_LOCAL_STATE_CHANGE,
+-
+-    NL80211_ATTR_AP_ISOLATE,
+-
+-    NL80211_ATTR_WIPHY_TX_POWER_SETTING,
+-    NL80211_ATTR_WIPHY_TX_POWER_LEVEL,
+-
+-    NL80211_ATTR_TX_FRAME_TYPES,
+-    NL80211_ATTR_RX_FRAME_TYPES,
+-    NL80211_ATTR_FRAME_TYPE,
+-
+-    NL80211_ATTR_CONTROL_PORT_ETHERTYPE,
+-    NL80211_ATTR_CONTROL_PORT_NO_ENCRYPT,
+-
+-    NL80211_ATTR_SUPPORT_IBSS_RSN,
+-
+-    /* add attributes here, update the policy in nl80211.c */
+-
+-    __NL80211_ATTR_AFTER_LAST,
+-    NL80211_ATTR_MAX = __NL80211_ATTR_AFTER_LAST - 1
+-};
+-
+-/* source-level API compatibility */
+-#define NL80211_ATTR_SCAN_GENERATION NL80211_ATTR_GENERATION
+-
+-/*
+- * Allow user space programs to use #ifdef on new attributes by defining them
+- * here
+- */
+-#define NL80211_CMD_CONNECT NL80211_CMD_CONNECT
+-#define NL80211_ATTR_HT_CAPABILITY NL80211_ATTR_HT_CAPABILITY
+-#define NL80211_ATTR_BSS_BASIC_RATES NL80211_ATTR_BSS_BASIC_RATES
+-#define NL80211_ATTR_WIPHY_TXQ_PARAMS NL80211_ATTR_WIPHY_TXQ_PARAMS
+-#define NL80211_ATTR_WIPHY_FREQ NL80211_ATTR_WIPHY_FREQ
+-#define NL80211_ATTR_WIPHY_CHANNEL_TYPE NL80211_ATTR_WIPHY_CHANNEL_TYPE
+-#define NL80211_ATTR_MGMT_SUBTYPE NL80211_ATTR_MGMT_SUBTYPE
+-#define NL80211_ATTR_IE NL80211_ATTR_IE
+-#define NL80211_ATTR_REG_INITIATOR NL80211_ATTR_REG_INITIATOR
+-#define NL80211_ATTR_REG_TYPE NL80211_ATTR_REG_TYPE
+-#define NL80211_ATTR_FRAME NL80211_ATTR_FRAME
+-#define NL80211_ATTR_SSID NL80211_ATTR_SSID
+-#define NL80211_ATTR_AUTH_TYPE NL80211_ATTR_AUTH_TYPE
+-#define NL80211_ATTR_REASON_CODE NL80211_ATTR_REASON_CODE
+-#define NL80211_ATTR_CIPHER_SUITES_PAIRWISE NL80211_ATTR_CIPHER_SUITES_PAIRWISE
+-#define NL80211_ATTR_CIPHER_SUITE_GROUP NL80211_ATTR_CIPHER_SUITE_GROUP
+-#define NL80211_ATTR_WPA_VERSIONS NL80211_ATTR_WPA_VERSIONS
+-#define NL80211_ATTR_AKM_SUITES NL80211_ATTR_AKM_SUITES
+-#define NL80211_ATTR_KEY NL80211_ATTR_KEY
+-#define NL80211_ATTR_KEYS NL80211_ATTR_KEYS
+-
+-#define NL80211_MAX_SUPP_RATES            32
+-#define NL80211_MAX_SUPP_REG_RULES        32
+-#define NL80211_TKIP_DATA_OFFSET_ENCR_KEY    0
+-#define NL80211_TKIP_DATA_OFFSET_TX_MIC_KEY    16
+-#define NL80211_TKIP_DATA_OFFSET_RX_MIC_KEY    24
+-#define NL80211_HT_CAPABILITY_LEN        26
+-
+-#define NL80211_MAX_NR_CIPHER_SUITES        5
+-#define NL80211_MAX_NR_AKM_SUITES        2
+-
+-/**
+- * enum nl80211_iftype - (virtual) interface types
+- *
+- * @NL80211_IFTYPE_UNSPECIFIED: unspecified type, driver decides
+- * @NL80211_IFTYPE_ADHOC: independent BSS member
+- * @NL80211_IFTYPE_STATION: managed BSS member
+- * @NL80211_IFTYPE_AP: access point
+- * @NL80211_IFTYPE_AP_VLAN: VLAN interface for access points
+- * @NL80211_IFTYPE_WDS: wireless distribution interface
+- * @NL80211_IFTYPE_MONITOR: monitor interface receiving all frames
+- * @NL80211_IFTYPE_MESH_POINT: mesh point
+- * @NL80211_IFTYPE_P2P_CLIENT: P2P client
+- * @NL80211_IFTYPE_P2P_GO: P2P group owner
+- * @NL80211_IFTYPE_MAX: highest interface type number currently defined
+- * @NUM_NL80211_IFTYPES: number of defined interface types
+- *
+- * These values are used with the %NL80211_ATTR_IFTYPE
+- * to set the type of an interface.
+- *
+- */
+-enum nl80211_iftype {
+-    NL80211_IFTYPE_UNSPECIFIED,
+-    NL80211_IFTYPE_ADHOC,
+-    NL80211_IFTYPE_STATION,
+-    NL80211_IFTYPE_AP,
+-    NL80211_IFTYPE_AP_VLAN,
+-    NL80211_IFTYPE_WDS,
+-    NL80211_IFTYPE_MONITOR,
+-    NL80211_IFTYPE_MESH_POINT,
+-    NL80211_IFTYPE_P2P_CLIENT,
+-    NL80211_IFTYPE_P2P_GO,
+-
+-    /* keep last */
+-    NUM_NL80211_IFTYPES,
+-    NL80211_IFTYPE_MAX = NUM_NL80211_IFTYPES - 1
+-};
+-
+-/**
+- * enum nl80211_sta_flags - station flags
+- *
+- * Station flags. When a station is added to an AP interface, it is
+- * assumed to be already associated (and hence authenticated.)
+- *
+- * @__NL80211_STA_FLAG_INVALID: attribute number 0 is reserved
+- * @NL80211_STA_FLAG_AUTHORIZED: station is authorized (802.1X)
+- * @NL80211_STA_FLAG_SHORT_PREAMBLE: station is capable of receiving frames
+- *    with short barker preamble
+- * @NL80211_STA_FLAG_WME: station is WME/QoS capable
+- * @NL80211_STA_FLAG_MFP: station uses management frame protection
+- * @NL80211_STA_FLAG_MAX: highest station flag number currently defined
+- * @__NL80211_STA_FLAG_AFTER_LAST: internal use
+- */
+-enum nl80211_sta_flags {
+-    __NL80211_STA_FLAG_INVALID,
+-    NL80211_STA_FLAG_AUTHORIZED,
+-    NL80211_STA_FLAG_SHORT_PREAMBLE,
+-    NL80211_STA_FLAG_WME,
+-    NL80211_STA_FLAG_MFP,
+-
+-    /* keep last */
+-    __NL80211_STA_FLAG_AFTER_LAST,
+-    NL80211_STA_FLAG_MAX = __NL80211_STA_FLAG_AFTER_LAST - 1
+-};
+-
+-/**
+- * struct nl80211_sta_flag_update - station flags mask/set
+- * @mask: mask of station flags to set
+- * @set: which values to set them to
+- *
+- * Both mask and set contain bits as per &enum nl80211_sta_flags.
+- */
+-struct nl80211_sta_flag_update {
+-    __u32 mask;
+-    __u32 set;
+-} __attribute__((packed));
+-
+-/**
+- * enum nl80211_rate_info - bitrate information
+- *
+- * These attribute types are used with %NL80211_STA_INFO_TXRATE
+- * when getting information about the bitrate of a station.
+- *
+- * @__NL80211_RATE_INFO_INVALID: attribute number 0 is reserved
+- * @NL80211_RATE_INFO_BITRATE: total bitrate (u16, 100kbit/s)
+- * @NL80211_RATE_INFO_MCS: mcs index for 802.11n (u8)
+- * @NL80211_RATE_INFO_40_MHZ_WIDTH: 40 Mhz dualchannel bitrate
+- * @NL80211_RATE_INFO_SHORT_GI: 400ns guard interval
+- * @NL80211_RATE_INFO_MAX: highest rate_info number currently defined
+- * @__NL80211_RATE_INFO_AFTER_LAST: internal use
+- */
+-enum nl80211_rate_info {
+-    __NL80211_RATE_INFO_INVALID,
+-    NL80211_RATE_INFO_BITRATE,
+-    NL80211_RATE_INFO_MCS,
+-    NL80211_RATE_INFO_40_MHZ_WIDTH,
+-    NL80211_RATE_INFO_SHORT_GI,
+-
+-    /* keep last */
+-    __NL80211_RATE_INFO_AFTER_LAST,
+-    NL80211_RATE_INFO_MAX = __NL80211_RATE_INFO_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_sta_info - station information
+- *
+- * These attribute types are used with %NL80211_ATTR_STA_INFO
+- * when getting information about a station.
+- *
+- * @__NL80211_STA_INFO_INVALID: attribute number 0 is reserved
+- * @NL80211_STA_INFO_INACTIVE_TIME: time since last activity (u32, msecs)
+- * @NL80211_STA_INFO_RX_BYTES: total received bytes (u32, from this station)
+- * @NL80211_STA_INFO_TX_BYTES: total transmitted bytes (u32, to this station)
+- * @__NL80211_STA_INFO_AFTER_LAST: internal
+- * @NL80211_STA_INFO_MAX: highest possible station info attribute
+- * @NL80211_STA_INFO_SIGNAL: signal strength of last received PPDU (u8, dBm)
+- * @NL80211_STA_INFO_TX_BITRATE: current unicast tx rate, nested attribute
+- *     containing info as possible, see &enum nl80211_sta_info_txrate.
+- * @NL80211_STA_INFO_RX_PACKETS: total received packet (u32, from this station)
+- * @NL80211_STA_INFO_TX_PACKETS: total transmitted packets (u32, to this
+- *    station)
+- * @NL80211_STA_INFO_TX_RETRIES: total retries (u32, to this station)
+- * @NL80211_STA_INFO_TX_FAILED: total failed packets (u32, to this station)
+- */
+-enum nl80211_sta_info {
+-    __NL80211_STA_INFO_INVALID,
+-    NL80211_STA_INFO_INACTIVE_TIME,
+-    NL80211_STA_INFO_RX_BYTES,
+-    NL80211_STA_INFO_TX_BYTES,
+-    NL80211_STA_INFO_LLID,
+-    NL80211_STA_INFO_PLID,
+-    NL80211_STA_INFO_PLINK_STATE,
+-    NL80211_STA_INFO_SIGNAL,
+-    NL80211_STA_INFO_TX_BITRATE,
+-    NL80211_STA_INFO_RX_PACKETS,
+-    NL80211_STA_INFO_TX_PACKETS,
+-    NL80211_STA_INFO_TX_RETRIES,
+-    NL80211_STA_INFO_TX_FAILED,
+-
+-    /* keep last */
+-    __NL80211_STA_INFO_AFTER_LAST,
+-    NL80211_STA_INFO_MAX = __NL80211_STA_INFO_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_mpath_flags - nl80211 mesh path flags
+- *
+- * @NL80211_MPATH_FLAG_ACTIVE: the mesh path is active
+- * @NL80211_MPATH_FLAG_RESOLVING: the mesh path discovery process is running
+- * @NL80211_MPATH_FLAG_SN_VALID: the mesh path contains a valid SN
+- * @NL80211_MPATH_FLAG_FIXED: the mesh path has been manually set
+- * @NL80211_MPATH_FLAG_RESOLVED: the mesh path discovery process succeeded
+- */
+-enum nl80211_mpath_flags {
+-    NL80211_MPATH_FLAG_ACTIVE =    1<<0,
+-    NL80211_MPATH_FLAG_RESOLVING =    1<<1,
+-    NL80211_MPATH_FLAG_SN_VALID =    1<<2,
+-    NL80211_MPATH_FLAG_FIXED =    1<<3,
+-    NL80211_MPATH_FLAG_RESOLVED =    1<<4,
+-};
+-
+-/**
+- * enum nl80211_mpath_info - mesh path information
+- *
+- * These attribute types are used with %NL80211_ATTR_MPATH_INFO when getting
+- * information about a mesh path.
+- *
+- * @__NL80211_MPATH_INFO_INVALID: attribute number 0 is reserved
+- * @NL80211_MPATH_INFO_FRAME_QLEN: number of queued frames for this destination
+- * @NL80211_MPATH_INFO_SN: destination sequence number
+- * @NL80211_MPATH_INFO_METRIC: metric (cost) of this mesh path
+- * @NL80211_MPATH_INFO_EXPTIME: expiration time for the path, in msec from now
+- * @NL80211_MPATH_INFO_FLAGS: mesh path flags, enumerated in
+- *     &enum nl80211_mpath_flags;
+- * @NL80211_MPATH_INFO_DISCOVERY_TIMEOUT: total path discovery timeout, in msec
+- * @NL80211_MPATH_INFO_DISCOVERY_RETRIES: mesh path discovery retries
+- * @NL80211_MPATH_INFO_MAX: highest mesh path information attribute number
+- *    currently defind
+- * @__NL80211_MPATH_INFO_AFTER_LAST: internal use
+- */
+-enum nl80211_mpath_info {
+-    __NL80211_MPATH_INFO_INVALID,
+-    NL80211_MPATH_INFO_FRAME_QLEN,
+-    NL80211_MPATH_INFO_SN,
+-    NL80211_MPATH_INFO_METRIC,
+-    NL80211_MPATH_INFO_EXPTIME,
+-    NL80211_MPATH_INFO_FLAGS,
+-    NL80211_MPATH_INFO_DISCOVERY_TIMEOUT,
+-    NL80211_MPATH_INFO_DISCOVERY_RETRIES,
+-
+-    /* keep last */
+-    __NL80211_MPATH_INFO_AFTER_LAST,
+-    NL80211_MPATH_INFO_MAX = __NL80211_MPATH_INFO_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_band_attr - band attributes
+- * @__NL80211_BAND_ATTR_INVALID: attribute number 0 is reserved
+- * @NL80211_BAND_ATTR_FREQS: supported frequencies in this band,
+- *    an array of nested frequency attributes
+- * @NL80211_BAND_ATTR_RATES: supported bitrates in this band,
+- *    an array of nested bitrate attributes
+- * @NL80211_BAND_ATTR_HT_MCS_SET: 16-byte attribute containing the MCS set as
+- *    defined in 802.11n
+- * @NL80211_BAND_ATTR_HT_CAPA: HT capabilities, as in the HT information IE
+- * @NL80211_BAND_ATTR_HT_AMPDU_FACTOR: A-MPDU factor, as in 11n
+- * @NL80211_BAND_ATTR_HT_AMPDU_DENSITY: A-MPDU density, as in 11n
+- * @NL80211_BAND_ATTR_MAX: highest band attribute currently defined
+- * @__NL80211_BAND_ATTR_AFTER_LAST: internal use
+- */
+-enum nl80211_band_attr {
+-    __NL80211_BAND_ATTR_INVALID,
+-    NL80211_BAND_ATTR_FREQS,
+-    NL80211_BAND_ATTR_RATES,
+-
+-    NL80211_BAND_ATTR_HT_MCS_SET,
+-    NL80211_BAND_ATTR_HT_CAPA,
+-    NL80211_BAND_ATTR_HT_AMPDU_FACTOR,
+-    NL80211_BAND_ATTR_HT_AMPDU_DENSITY,
+-
+-    /* keep last */
+-    __NL80211_BAND_ATTR_AFTER_LAST,
+-    NL80211_BAND_ATTR_MAX = __NL80211_BAND_ATTR_AFTER_LAST - 1
+-};
+-
+-#define NL80211_BAND_ATTR_HT_CAPA NL80211_BAND_ATTR_HT_CAPA
+-
+-/**
+- * enum nl80211_frequency_attr - frequency attributes
+- * @__NL80211_FREQUENCY_ATTR_INVALID: attribute number 0 is reserved
+- * @NL80211_FREQUENCY_ATTR_FREQ: Frequency in MHz
+- * @NL80211_FREQUENCY_ATTR_DISABLED: Channel is disabled in current
+- *    regulatory domain.
+- * @NL80211_FREQUENCY_ATTR_PASSIVE_SCAN: Only passive scanning is
+- *    permitted on this channel in current regulatory domain.
+- * @NL80211_FREQUENCY_ATTR_NO_IBSS: IBSS networks are not permitted
+- *    on this channel in current regulatory domain.
+- * @NL80211_FREQUENCY_ATTR_RADAR: Radar detection is mandatory
+- *    on this channel in current regulatory domain.
+- * @NL80211_FREQUENCY_ATTR_MAX_TX_POWER: Maximum transmission power in mBm
+- *    (100 * dBm).
+- * @NL80211_FREQUENCY_ATTR_MAX: highest frequency attribute number
+- *    currently defined
+- * @__NL80211_FREQUENCY_ATTR_AFTER_LAST: internal use
+- */
+-enum nl80211_frequency_attr {
+-    __NL80211_FREQUENCY_ATTR_INVALID,
+-    NL80211_FREQUENCY_ATTR_FREQ,
+-    NL80211_FREQUENCY_ATTR_DISABLED,
+-    NL80211_FREQUENCY_ATTR_PASSIVE_SCAN,
+-    NL80211_FREQUENCY_ATTR_NO_IBSS,
+-    NL80211_FREQUENCY_ATTR_RADAR,
+-    NL80211_FREQUENCY_ATTR_MAX_TX_POWER,
+-
+-    /* keep last */
+-    __NL80211_FREQUENCY_ATTR_AFTER_LAST,
+-    NL80211_FREQUENCY_ATTR_MAX = __NL80211_FREQUENCY_ATTR_AFTER_LAST - 1
+-};
+-
+-#define NL80211_FREQUENCY_ATTR_MAX_TX_POWER NL80211_FREQUENCY_ATTR_MAX_TX_POWER
+-
+-/**
+- * enum nl80211_bitrate_attr - bitrate attributes
+- * @__NL80211_BITRATE_ATTR_INVALID: attribute number 0 is reserved
+- * @NL80211_BITRATE_ATTR_RATE: Bitrate in units of 100 kbps
+- * @NL80211_BITRATE_ATTR_2GHZ_SHORTPREAMBLE: Short preamble supported
+- *    in 2.4 GHz band.
+- * @NL80211_BITRATE_ATTR_MAX: highest bitrate attribute number
+- *    currently defined
+- * @__NL80211_BITRATE_ATTR_AFTER_LAST: internal use
+- */
+-enum nl80211_bitrate_attr {
+-    __NL80211_BITRATE_ATTR_INVALID,
+-    NL80211_BITRATE_ATTR_RATE,
+-    NL80211_BITRATE_ATTR_2GHZ_SHORTPREAMBLE,
+-
+-    /* keep last */
+-    __NL80211_BITRATE_ATTR_AFTER_LAST,
+-    NL80211_BITRATE_ATTR_MAX = __NL80211_BITRATE_ATTR_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_initiator - Indicates the initiator of a reg domain request
+- * @NL80211_REGDOM_SET_BY_CORE: Core queried CRDA for a dynamic world
+- *     regulatory domain.
+- * @NL80211_REGDOM_SET_BY_USER: User asked the wireless core to set the
+- *     regulatory domain.
+- * @NL80211_REGDOM_SET_BY_DRIVER: a wireless drivers has hinted to the
+- *     wireless core it thinks its knows the regulatory domain we should be in.
+- * @NL80211_REGDOM_SET_BY_COUNTRY_IE: the wireless core has received an
+- *     802.11 country information element with regulatory information it
+- *     thinks we should consider.
+- */
+-enum nl80211_reg_initiator {
+-    NL80211_REGDOM_SET_BY_CORE,
+-    NL80211_REGDOM_SET_BY_USER,
+-    NL80211_REGDOM_SET_BY_DRIVER,
+-    NL80211_REGDOM_SET_BY_COUNTRY_IE,
+-};
+-
+-/**
+- * enum nl80211_reg_type - specifies the type of regulatory domain
+- * @NL80211_REGDOM_TYPE_COUNTRY: the regulatory domain set is one that pertains
+- *    to a specific country. When this is set you can count on the
+- *    ISO / IEC 3166 alpha2 country code being valid.
+- * @NL80211_REGDOM_TYPE_WORLD: the regulatory set domain is the world regulatory
+- *     domain.
+- * @NL80211_REGDOM_TYPE_CUSTOM_WORLD: the regulatory domain set is a custom
+- *     driver specific world regulatory domain. These do not apply system-wide
+- *     and are only applicable to the individual devices which have requested
+- *     them to be applied.
+- * @NL80211_REGDOM_TYPE_INTERSECTION: the regulatory domain set is the product
+- *    of an intersection between two regulatory domains -- the previously
+- *    set regulatory domain on the system and the last accepted regulatory
+- *    domain request to be processed.
+- */
+-enum nl80211_reg_type {
+-    NL80211_REGDOM_TYPE_COUNTRY,
+-    NL80211_REGDOM_TYPE_WORLD,
+-    NL80211_REGDOM_TYPE_CUSTOM_WORLD,
+-    NL80211_REGDOM_TYPE_INTERSECTION,
+-};
+-
+-/**
+- * enum nl80211_reg_rule_attr - regulatory rule attributes
+- * @__NL80211_REG_RULE_ATTR_INVALID: attribute number 0 is reserved
+- * @NL80211_ATTR_REG_RULE_FLAGS: a set of flags which specify additional
+- *     considerations for a given frequency range. These are the
+- *     &enum nl80211_reg_rule_flags.
+- * @NL80211_ATTR_FREQ_RANGE_START: starting frequencry for the regulatory
+- *     rule in KHz. This is not a center of frequency but an actual regulatory
+- *     band edge.
+- * @NL80211_ATTR_FREQ_RANGE_END: ending frequency for the regulatory rule
+- *     in KHz. This is not a center a frequency but an actual regulatory
+- *     band edge.
+- * @NL80211_ATTR_FREQ_RANGE_MAX_BW: maximum allowed bandwidth for this
+- *     frequency range, in KHz.
+- * @NL80211_ATTR_POWER_RULE_MAX_ANT_GAIN: the maximum allowed antenna gain
+- *     for a given frequency range. The value is in mBi (100 * dBi).
+- *     If you don't have one then don't send this.
+- * @NL80211_ATTR_POWER_RULE_MAX_EIRP: the maximum allowed EIRP for
+- *     a given frequency range. The value is in mBm (100 * dBm).
+- * @NL80211_REG_RULE_ATTR_MAX: highest regulatory rule attribute number
+- *    currently defined
+- * @__NL80211_REG_RULE_ATTR_AFTER_LAST: internal use
+- */
+-enum nl80211_reg_rule_attr {
+-    __NL80211_REG_RULE_ATTR_INVALID,
+-    NL80211_ATTR_REG_RULE_FLAGS,
+-
+-    NL80211_ATTR_FREQ_RANGE_START,
+-    NL80211_ATTR_FREQ_RANGE_END,
+-    NL80211_ATTR_FREQ_RANGE_MAX_BW,
+-
+-    NL80211_ATTR_POWER_RULE_MAX_ANT_GAIN,
+-    NL80211_ATTR_POWER_RULE_MAX_EIRP,
+-
+-    /* keep last */
+-    __NL80211_REG_RULE_ATTR_AFTER_LAST,
+-    NL80211_REG_RULE_ATTR_MAX = __NL80211_REG_RULE_ATTR_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_reg_rule_flags - regulatory rule flags
+- *
+- * @NL80211_RRF_NO_OFDM: OFDM modulation not allowed
+- * @NL80211_RRF_NO_CCK: CCK modulation not allowed
+- * @NL80211_RRF_NO_INDOOR: indoor operation not allowed
+- * @NL80211_RRF_NO_OUTDOOR: outdoor operation not allowed
+- * @NL80211_RRF_DFS: DFS support is required to be used
+- * @NL80211_RRF_PTP_ONLY: this is only for Point To Point links
+- * @NL80211_RRF_PTMP_ONLY: this is only for Point To Multi Point links
+- * @NL80211_RRF_PASSIVE_SCAN: passive scan is required
+- * @NL80211_RRF_NO_IBSS: no IBSS is allowed
+- */
+-enum nl80211_reg_rule_flags {
+-    NL80211_RRF_NO_OFDM        = 1<<0,
+-    NL80211_RRF_NO_CCK        = 1<<1,
+-    NL80211_RRF_NO_INDOOR        = 1<<2,
+-    NL80211_RRF_NO_OUTDOOR        = 1<<3,
+-    NL80211_RRF_DFS            = 1<<4,
+-    NL80211_RRF_PTP_ONLY        = 1<<5,
+-    NL80211_RRF_PTMP_ONLY        = 1<<6,
+-    NL80211_RRF_PASSIVE_SCAN    = 1<<7,
+-    NL80211_RRF_NO_IBSS        = 1<<8,
+-};
+-
+-/**
+- * enum nl80211_survey_info - survey information
+- *
+- * These attribute types are used with %NL80211_ATTR_SURVEY_INFO
+- * when getting information about a survey.
+- *
+- * @__NL80211_SURVEY_INFO_INVALID: attribute number 0 is reserved
+- * @NL80211_SURVEY_INFO_FREQUENCY: center frequency of channel
+- * @NL80211_SURVEY_INFO_NOISE: noise level of channel (u8, dBm)
+- * @NL80211_SURVEY_INFO_IN_USE: channel is currently being used
+- * @NL80211_SURVEY_INFO_MAX: highest survey info attribute number
+- *    currently defined
+- * @__NL80211_SURVEY_INFO_AFTER_LAST: internal use
+- */
+-enum nl80211_survey_info {
+-    __NL80211_SURVEY_INFO_INVALID,
+-    NL80211_SURVEY_INFO_FREQUENCY,
+-    NL80211_SURVEY_INFO_NOISE,
+-    NL80211_SURVEY_INFO_IN_USE,
+-
+-    /* keep last */
+-    __NL80211_SURVEY_INFO_AFTER_LAST,
+-    NL80211_SURVEY_INFO_MAX = __NL80211_SURVEY_INFO_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_mntr_flags - monitor configuration flags
+- *
+- * Monitor configuration flags.
+- *
+- * @__NL80211_MNTR_FLAG_INVALID: reserved
+- *
+- * @NL80211_MNTR_FLAG_FCSFAIL: pass frames with bad FCS
+- * @NL80211_MNTR_FLAG_PLCPFAIL: pass frames with bad PLCP
+- * @NL80211_MNTR_FLAG_CONTROL: pass control frames
+- * @NL80211_MNTR_FLAG_OTHER_BSS: disable BSSID filtering
+- * @NL80211_MNTR_FLAG_COOK_FRAMES: report frames after processing.
+- *    overrides all other flags.
+- *
+- * @__NL80211_MNTR_FLAG_AFTER_LAST: internal use
+- * @NL80211_MNTR_FLAG_MAX: highest possible monitor flag
+- */
+-enum nl80211_mntr_flags {
+-    __NL80211_MNTR_FLAG_INVALID,
+-    NL80211_MNTR_FLAG_FCSFAIL,
+-    NL80211_MNTR_FLAG_PLCPFAIL,
+-    NL80211_MNTR_FLAG_CONTROL,
+-    NL80211_MNTR_FLAG_OTHER_BSS,
+-    NL80211_MNTR_FLAG_COOK_FRAMES,
+-
+-    /* keep last */
+-    __NL80211_MNTR_FLAG_AFTER_LAST,
+-    NL80211_MNTR_FLAG_MAX = __NL80211_MNTR_FLAG_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_meshconf_params - mesh configuration parameters
+- *
+- * Mesh configuration parameters
+- *
+- * @__NL80211_MESHCONF_INVALID: internal use
+- *
+- * @NL80211_MESHCONF_RETRY_TIMEOUT: specifies the initial retry timeout in
+- * millisecond units, used by the Peer Link Open message
+- *
+- * @NL80211_MESHCONF_CONFIRM_TIMEOUT: specifies the inital confirm timeout, in
+- * millisecond units, used by the peer link management to close a peer link
+- *
+- * @NL80211_MESHCONF_HOLDING_TIMEOUT: specifies the holding timeout, in
+- * millisecond units
+- *
+- * @NL80211_MESHCONF_MAX_PEER_LINKS: maximum number of peer links allowed
+- * on this mesh interface
+- *
+- * @NL80211_MESHCONF_MAX_RETRIES: specifies the maximum number of peer link
+- * open retries that can be sent to establish a new peer link instance in a
+- * mesh
+- *
+- * @NL80211_MESHCONF_TTL: specifies the value of TTL field set at a source mesh
+- * point.
+- *
+- * @NL80211_MESHCONF_AUTO_OPEN_PLINKS: whether we should automatically
+- * open peer links when we detect compatible mesh peers.
+- *
+- * @NL80211_MESHCONF_HWMP_MAX_PREQ_RETRIES: the number of action frames
+- * containing a PREQ that an MP can send to a particular destination (path
+- * target)
+- *
+- * @NL80211_MESHCONF_PATH_REFRESH_TIME: how frequently to refresh mesh paths
+- * (in milliseconds)
+- *
+- * @NL80211_MESHCONF_MIN_DISCOVERY_TIMEOUT: minimum length of time to wait
+- * until giving up on a path discovery (in milliseconds)
+- *
+- * @NL80211_MESHCONF_HWMP_ACTIVE_PATH_TIMEOUT: The time (in TUs) for which mesh
+- * points receiving a PREQ shall consider the forwarding information from the
+- * root to be valid. (TU = time unit)
+- *
+- * @NL80211_MESHCONF_HWMP_PREQ_MIN_INTERVAL: The minimum interval of time (in
+- * TUs) during which an MP can send only one action frame containing a PREQ
+- * reference element
+- *
+- * @NL80211_MESHCONF_HWMP_NET_DIAM_TRVS_TIME: The interval of time (in TUs)
+- * that it takes for an HWMP information element to propagate across the mesh
+- *
+- * @NL80211_MESHCONF_ROOTMODE: whether root mode is enabled or not
+- *
+- * @NL80211_MESHCONF_ATTR_MAX: highest possible mesh configuration attribute
+- *
+- * @__NL80211_MESHCONF_ATTR_AFTER_LAST: internal use
+- */
+-enum nl80211_meshconf_params {
+-    __NL80211_MESHCONF_INVALID,
+-    NL80211_MESHCONF_RETRY_TIMEOUT,
+-    NL80211_MESHCONF_CONFIRM_TIMEOUT,
+-    NL80211_MESHCONF_HOLDING_TIMEOUT,
+-    NL80211_MESHCONF_MAX_PEER_LINKS,
+-    NL80211_MESHCONF_MAX_RETRIES,
+-    NL80211_MESHCONF_TTL,
+-    NL80211_MESHCONF_AUTO_OPEN_PLINKS,
+-    NL80211_MESHCONF_HWMP_MAX_PREQ_RETRIES,
+-    NL80211_MESHCONF_PATH_REFRESH_TIME,
+-    NL80211_MESHCONF_MIN_DISCOVERY_TIMEOUT,
+-    NL80211_MESHCONF_HWMP_ACTIVE_PATH_TIMEOUT,
+-    NL80211_MESHCONF_HWMP_PREQ_MIN_INTERVAL,
+-    NL80211_MESHCONF_HWMP_NET_DIAM_TRVS_TIME,
+-    NL80211_MESHCONF_HWMP_ROOTMODE,
+-
+-    /* keep last */
+-    __NL80211_MESHCONF_ATTR_AFTER_LAST,
+-    NL80211_MESHCONF_ATTR_MAX = __NL80211_MESHCONF_ATTR_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_txq_attr - TX queue parameter attributes
+- * @__NL80211_TXQ_ATTR_INVALID: Attribute number 0 is reserved
+- * @NL80211_TXQ_ATTR_QUEUE: TX queue identifier (NL80211_TXQ_Q_*)
+- * @NL80211_TXQ_ATTR_TXOP: Maximum burst time in units of 32 usecs, 0 meaning
+- *    disabled
+- * @NL80211_TXQ_ATTR_CWMIN: Minimum contention window [a value of the form
+- *    2^n-1 in the range 1..32767]
+- * @NL80211_TXQ_ATTR_CWMAX: Maximum contention window [a value of the form
+- *    2^n-1 in the range 1..32767]
+- * @NL80211_TXQ_ATTR_AIFS: Arbitration interframe space [0..255]
+- * @__NL80211_TXQ_ATTR_AFTER_LAST: Internal
+- * @NL80211_TXQ_ATTR_MAX: Maximum TXQ attribute number
+- */
+-enum nl80211_txq_attr {
+-    __NL80211_TXQ_ATTR_INVALID,
+-    NL80211_TXQ_ATTR_QUEUE,
+-    NL80211_TXQ_ATTR_TXOP,
+-    NL80211_TXQ_ATTR_CWMIN,
+-    NL80211_TXQ_ATTR_CWMAX,
+-    NL80211_TXQ_ATTR_AIFS,
+-
+-    /* keep last */
+-    __NL80211_TXQ_ATTR_AFTER_LAST,
+-    NL80211_TXQ_ATTR_MAX = __NL80211_TXQ_ATTR_AFTER_LAST - 1
+-};
+-
+-enum nl80211_txq_q {
+-    NL80211_TXQ_Q_VO,
+-    NL80211_TXQ_Q_VI,
+-    NL80211_TXQ_Q_BE,
+-    NL80211_TXQ_Q_BK
+-};
+-
+-enum nl80211_channel_type {
+-    NL80211_CHAN_NO_HT,
+-    NL80211_CHAN_HT20,
+-    NL80211_CHAN_HT40MINUS,
+-    NL80211_CHAN_HT40PLUS
+-};
+-
+-/**
+- * enum nl80211_bss - netlink attributes for a BSS
+- *
+- * @__NL80211_BSS_INVALID: invalid
+- * @NL80211_BSS_BSSID: BSSID of the BSS (6 octets)
+- * @NL80211_BSS_FREQUENCY: frequency in MHz (u32)
+- * @NL80211_BSS_TSF: TSF of the received probe response/beacon (u64)
+- * @NL80211_BSS_BEACON_INTERVAL: beacon interval of the (I)BSS (u16)
+- * @NL80211_BSS_CAPABILITY: capability field (CPU order, u16)
+- * @NL80211_BSS_INFORMATION_ELEMENTS: binary attribute containing the
+- *    raw information elements from the probe response/beacon (bin);
+- *    if the %NL80211_BSS_BEACON_IES attribute is present, the IEs here are
+- *    from a Probe Response frame; otherwise they are from a Beacon frame.
+- *    However, if the driver does not indicate the source of the IEs, these
+- *    IEs may be from either frame subtype.
+- * @NL80211_BSS_SIGNAL_MBM: signal strength of probe response/beacon
+- *    in mBm (100 * dBm) (s32)
+- * @NL80211_BSS_SIGNAL_UNSPEC: signal strength of the probe response/beacon
+- *    in unspecified units, scaled to 0..100 (u8)
+- * @NL80211_BSS_STATUS: status, if this BSS is "used"
+- * @NL80211_BSS_SEEN_MS_AGO: age of this BSS entry in ms
+- * @NL80211_BSS_BEACON_IES: binary attribute containing the raw information
+- *    elements from a Beacon frame (bin); not present if no Beacon frame has
+- *    yet been received
+- * @__NL80211_BSS_AFTER_LAST: internal
+- * @NL80211_BSS_MAX: highest BSS attribute
+- */
+-enum nl80211_bss {
+-    __NL80211_BSS_INVALID,
+-    NL80211_BSS_BSSID,
+-    NL80211_BSS_FREQUENCY,
+-    NL80211_BSS_TSF,
+-    NL80211_BSS_BEACON_INTERVAL,
+-    NL80211_BSS_CAPABILITY,
+-    NL80211_BSS_INFORMATION_ELEMENTS,
+-    NL80211_BSS_SIGNAL_MBM,
+-    NL80211_BSS_SIGNAL_UNSPEC,
+-    NL80211_BSS_STATUS,
+-    NL80211_BSS_SEEN_MS_AGO,
+-    NL80211_BSS_BEACON_IES,
+-
+-    /* keep last */
+-    __NL80211_BSS_AFTER_LAST,
+-    NL80211_BSS_MAX = __NL80211_BSS_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_bss_status - BSS "status"
+- * @NL80211_BSS_STATUS_AUTHENTICATED: Authenticated with this BSS.
+- * @NL80211_BSS_STATUS_ASSOCIATED: Associated with this BSS.
+- * @NL80211_BSS_STATUS_IBSS_JOINED: Joined to this IBSS.
+- *
+- * The BSS status is a BSS attribute in scan dumps, which
+- * indicates the status the interface has wrt. this BSS.
+- */
+-enum nl80211_bss_status {
+-    NL80211_BSS_STATUS_AUTHENTICATED,
+-    NL80211_BSS_STATUS_ASSOCIATED,
+-    NL80211_BSS_STATUS_IBSS_JOINED,
+-};
+-
+-/**
+- * enum nl80211_auth_type - AuthenticationType
+- *
+- * @NL80211_AUTHTYPE_OPEN_SYSTEM: Open System authentication
+- * @NL80211_AUTHTYPE_SHARED_KEY: Shared Key authentication (WEP only)
+- * @NL80211_AUTHTYPE_FT: Fast BSS Transition (IEEE 802.11r)
+- * @NL80211_AUTHTYPE_NETWORK_EAP: Network EAP (some Cisco APs and mainly LEAP)
+- * @__NL80211_AUTHTYPE_NUM: internal
+- * @NL80211_AUTHTYPE_MAX: maximum valid auth algorithm
+- * @NL80211_AUTHTYPE_AUTOMATIC: determine automatically (if necessary by
+- *    trying multiple times); this is invalid in netlink -- leave out
+- *    the attribute for this on CONNECT commands.
+- */
+-enum nl80211_auth_type {
+-    NL80211_AUTHTYPE_OPEN_SYSTEM,
+-    NL80211_AUTHTYPE_SHARED_KEY,
+-    NL80211_AUTHTYPE_FT,
+-    NL80211_AUTHTYPE_NETWORK_EAP,
+-
+-    /* keep last */
+-    __NL80211_AUTHTYPE_NUM,
+-    NL80211_AUTHTYPE_MAX = __NL80211_AUTHTYPE_NUM - 1,
+-    NL80211_AUTHTYPE_AUTOMATIC
+-};
+-
+-/**
+- * enum nl80211_key_type - Key Type
+- * @NL80211_KEYTYPE_GROUP: Group (broadcast/multicast) key
+- * @NL80211_KEYTYPE_PAIRWISE: Pairwise (unicast/individual) key
+- * @NL80211_KEYTYPE_PEERKEY: PeerKey (DLS)
+- * @NUM_NL80211_KEYTYPES: number of defined key types
+- */
+-enum nl80211_key_type {
+-    NL80211_KEYTYPE_GROUP,
+-    NL80211_KEYTYPE_PAIRWISE,
+-    NL80211_KEYTYPE_PEERKEY,
+-
+-    NUM_NL80211_KEYTYPES
+-};
+-
+-/**
+- * enum nl80211_mfp - Management frame protection state
+- * @NL80211_MFP_NO: Management frame protection not used
+- * @NL80211_MFP_REQUIRED: Management frame protection required
+- */
+-enum nl80211_mfp {
+-    NL80211_MFP_NO,
+-    NL80211_MFP_REQUIRED,
+-};
+-
+-enum nl80211_wpa_versions {
+-    NL80211_WPA_VERSION_1 = 1 << 0,
+-    NL80211_WPA_VERSION_2 = 1 << 1,
+-};
+-
+-/**
+- * enum nl80211_key_attributes - key attributes
+- * @__NL80211_KEY_INVALID: invalid
+- * @NL80211_KEY_DATA: (temporal) key data; for TKIP this consists of
+- *    16 bytes encryption key followed by 8 bytes each for TX and RX MIC
+- *    keys
+- * @NL80211_KEY_IDX: key ID (u8, 0-3)
+- * @NL80211_KEY_CIPHER: key cipher suite (u32, as defined by IEEE 802.11
+- *    section 7.3.2.25.1, e.g. 0x000FAC04)
+- * @NL80211_KEY_SEQ: transmit key sequence number (IV/PN) for TKIP and
+- *    CCMP keys, each six bytes in little endian
+- * @NL80211_KEY_DEFAULT: flag indicating default key
+- * @NL80211_KEY_DEFAULT_MGMT: flag indicating default management key
+- * @NL80211_KEY_TYPE: the key type from enum nl80211_key_type, if not
+- *    specified the default depends on whether a MAC address was
+- *    given with the command using the key or not (u32)
+- * @__NL80211_KEY_AFTER_LAST: internal
+- * @NL80211_KEY_MAX: highest key attribute
+- */
+-enum nl80211_key_attributes {
+-    __NL80211_KEY_INVALID,
+-    NL80211_KEY_DATA,
+-    NL80211_KEY_IDX,
+-    NL80211_KEY_CIPHER,
+-    NL80211_KEY_SEQ,
+-    NL80211_KEY_DEFAULT,
+-    NL80211_KEY_DEFAULT_MGMT,
+-    NL80211_KEY_TYPE,
+-
+-    /* keep last */
+-    __NL80211_KEY_AFTER_LAST,
+-    NL80211_KEY_MAX = __NL80211_KEY_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_tx_rate_attributes - TX rate set attributes
+- * @__NL80211_TXRATE_INVALID: invalid
+- * @NL80211_TXRATE_LEGACY: Legacy (non-MCS) rates allowed for TX rate selection
+- *    in an array of rates as defined in IEEE 802.11 7.3.2.2 (u8 values with
+- *    1 = 500 kbps) but without the IE length restriction (at most
+- *    %NL80211_MAX_SUPP_RATES in a single array).
+- * @__NL80211_TXRATE_AFTER_LAST: internal
+- * @NL80211_TXRATE_MAX: highest TX rate attribute
+- */
+-enum nl80211_tx_rate_attributes {
+-    __NL80211_TXRATE_INVALID,
+-    NL80211_TXRATE_LEGACY,
+-
+-    /* keep last */
+-    __NL80211_TXRATE_AFTER_LAST,
+-    NL80211_TXRATE_MAX = __NL80211_TXRATE_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_band - Frequency band
+- * @NL80211_BAND_2GHZ: 2.4 GHz ISM band
+- * @NL80211_BAND_5GHZ: around 5 GHz band (4.9 - 5.7 GHz)
+- */
+-enum nl80211_band {
+-    NL80211_BAND_2GHZ,
+-    NL80211_BAND_5GHZ,
+-};
+-
+-enum nl80211_ps_state {
+-    NL80211_PS_DISABLED,
+-    NL80211_PS_ENABLED,
+-};
+-
+-/**
+- * enum nl80211_attr_cqm - connection quality monitor attributes
+- * @__NL80211_ATTR_CQM_INVALID: invalid
+- * @NL80211_ATTR_CQM_RSSI_THOLD: RSSI threshold in dBm. This value specifies
+- *    the threshold for the RSSI level at which an event will be sent. Zero
+- *    to disable.
+- * @NL80211_ATTR_CQM_RSSI_HYST: RSSI hysteresis in dBm. This value specifies
+- *    the minimum amount the RSSI level must change after an event before a
+- *    new event may be issued (to reduce effects of RSSI oscillation).
+- * @NL80211_ATTR_CQM_RSSI_THRESHOLD_EVENT: RSSI threshold event
+- * @__NL80211_ATTR_CQM_AFTER_LAST: internal
+- * @NL80211_ATTR_CQM_MAX: highest key attribute
+- */
+-enum nl80211_attr_cqm {
+-    __NL80211_ATTR_CQM_INVALID,
+-    NL80211_ATTR_CQM_RSSI_THOLD,
+-    NL80211_ATTR_CQM_RSSI_HYST,
+-    NL80211_ATTR_CQM_RSSI_THRESHOLD_EVENT,
+-
+-    /* keep last */
+-    __NL80211_ATTR_CQM_AFTER_LAST,
+-    NL80211_ATTR_CQM_MAX = __NL80211_ATTR_CQM_AFTER_LAST - 1
+-};
+-
+-/**
+- * enum nl80211_cqm_rssi_threshold_event - RSSI threshold event
+- * @NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW: The RSSI level is lower than the
+- *      configured threshold
+- * @NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH: The RSSI is higher than the
+- *      configured threshold
+- */
+-enum nl80211_cqm_rssi_threshold_event {
+-    NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW,
+-    NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH,
+-};
+-
+-
+-/**
+- * enum nl80211_tx_power_setting - TX power adjustment
+- * @NL80211_TX_POWER_AUTOMATIC: automatically determine transmit power
+- * @NL80211_TX_POWER_LIMITED: limit TX power by the mBm parameter
+- * @NL80211_TX_POWER_FIXED: fix TX power to the mBm parameter
+- */
+-enum nl80211_tx_power_setting {
+-    NL80211_TX_POWER_AUTOMATIC,
+-    NL80211_TX_POWER_LIMITED,
+-    NL80211_TX_POWER_FIXED,
+-};
+-
+-#endif /* __LINUX_NL80211_H */
+-- 
+1.7.9.5
+
