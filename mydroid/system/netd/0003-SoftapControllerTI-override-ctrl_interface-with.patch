@@ -1,0 +1,46 @@
+From: Eyal Shapira [eyal@wizery.com]
+Sent: ??? ????? 02 ?????? 2012 16:23
+To: mcs-mac80211@list.ti.com - MCS mac80211 Development Team (May
+contain non-TIers)
+Subject: [PATCH] SoftapControllerTI: override ctrl_interface with
+correct interface
+
+Set ctrl_interface in hostapd.conf to wlan1 instead of whatever
+appears in the hostapd.conf template. Otherwise hostapd can't
+setup the control interface.
+
+Change-Id: I97fbfcb1bdab7898b734f8dde18bb55518419a3c
+Signed-off-by: Eyal Shapira <eyal@wizery.com>
+---
+This one fixes softAP.
+Should be applied on mydroid/system/netd
+
+ SoftapControllerTI.cpp |    5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/SoftapControllerTI.cpp b/SoftapControllerTI.cpp
+index ed37f74..2603021 100644
+--- a/SoftapControllerTI.cpp
++++ b/SoftapControllerTI.cpp
+@@ -553,6 +553,7 @@ int SoftapController::setSoftap(int argc, char *argv[]) {
+            (strncmp(buf, "wpa_key_mgmt=",12) == 0) ||
+            (strncmp(buf, "wpa_pairwise=",12) == 0) ||
+            (strncmp(buf, "rsn_pairwise=",12) == 0) ||
++           (strncmp(buf, "ctrl_interface=",15) == 0) ||
+            (strncmp(buf, "interface=",10) == 0)) {
+            continue;
+         }
+@@ -563,6 +564,10 @@ int SoftapController::setSoftap(int argc, char *argv[]) {
+     sprintf(buf, "interface=%s\n", AP_INTERFACE);
+     fputs(buf, fp2);
+ 
++    // Update interface
++    sprintf(buf, "ctrl_interface=%s\n", AP_INTERFACE);
++    fputs(buf, fp2);
++
+     // Update SSID
+     sprintf(buf, "ssid=%s\n",argv[4]);
+     fputs(buf, fp2);
+-- 
+1.7.9.5
+
