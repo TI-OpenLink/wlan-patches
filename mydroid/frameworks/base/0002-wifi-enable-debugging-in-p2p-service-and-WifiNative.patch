@@ -1,0 +1,43 @@
+From c126f372ba58f2833dd1fbc9ae3d1e862f7fcf86 Mon Sep 17 00:00:00 2001
+From: Arik Nemtsov <arik@wizery.com>
+Date: Tue, 31 Jul 2012 16:36:10 +0300
+Subject: [PATCH 2/2] wifi: enable debugging in p2p service and WifiNative
+
+That way logcat is more useful during p2p connections.
+
+Change-Id: Ibb057d94581635fc560badf14c6303699d0a777a
+Signed-off-by: Arik Nemtsov <arik@wizery.com>
+---
+ core/jni/android_net_wifi_Wifi.cpp                 |    2 +-
+ wifi/java/android/net/wifi/p2p/WifiP2pService.java |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/core/jni/android_net_wifi_Wifi.cpp b/core/jni/android_net_wifi_Wifi.cpp
+index e7c4c23..6bbdb92 100644
+--- a/core/jni/android_net_wifi_Wifi.cpp
++++ b/core/jni/android_net_wifi_Wifi.cpp
+@@ -31,7 +31,7 @@
+ 
+ namespace android {
+ 
+-static jint DBG = false;
++static jint DBG = true;
+ 
+ static int doCommand(const char *ifname, const char *cmd, char *replybuf, int replybuflen)
+ {
+diff --git a/wifi/java/android/net/wifi/p2p/WifiP2pService.java b/wifi/java/android/net/wifi/p2p/WifiP2pService.java
+index b29feb4..4991204 100644
+--- a/wifi/java/android/net/wifi/p2p/WifiP2pService.java
++++ b/wifi/java/android/net/wifi/p2p/WifiP2pService.java
+@@ -99,7 +99,7 @@ import java.util.List;
+  */
+ public class WifiP2pService extends IWifiP2pManager.Stub {
+     private static final String TAG = "WifiP2pService";
+-    private static final boolean DBG = false;
++    private static final boolean DBG = true;
+     private static final String NETWORKTYPE = "WIFI_P2P";
+ 
+     private Context mContext;
+-- 
+1.7.9.5
+

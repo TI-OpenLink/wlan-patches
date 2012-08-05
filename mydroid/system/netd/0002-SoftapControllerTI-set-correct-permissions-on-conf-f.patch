@@ -1,13 +1,13 @@
-From 4e4c8baa9c2e2b25c047e0675c9f19cf93a67831 Mon Sep 17 00:00:00 2001
+From bbc8e11478f8e7de6ac94165544b732e9bda03da Mon Sep 17 00:00:00 2001
 From: Arik Nemtsov <arik@wizery.com>
 Date: Tue, 24 Jul 2012 14:55:21 +0300
-Subject: [PATCH 2/2] SoftapControllerTI: set correct permissions on conf file
+Subject: [PATCH 2/3] SoftapControllerTI: set correct permissions on conf file
 
 Change-Id: I820adfaaf0cdab80aadfb4bc9f490d0426956a86
 Signed-off-by: Arik Nemtsov <arik@wizery.com>
 ---
  SoftapControllerTI.cpp |   16 ++++++++++++++++
- 1 file changed, 16 insertions(+)
+ 1 files changed, 16 insertions(+), 0 deletions(-)
 
 diff --git a/SoftapControllerTI.cpp b/SoftapControllerTI.cpp
 index 4b14582..ed37f74 100644
@@ -44,5 +44,5 @@ index 4b14582..ed37f74 100644
      acquire_wake_lock(PARTIAL_WAKE_LOCK, AP_WAKE_LOCK);
  
 -- 
-1.7.9.5
+1.7.9
 
