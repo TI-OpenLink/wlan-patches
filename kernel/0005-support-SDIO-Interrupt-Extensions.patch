@@ -1,0 +1,58 @@
+From 19ccc724b9615e9a2301f4ac4ad6152575fe9cf8 Mon Sep 17 00:00:00 2001
+From: Eliad Peller <eliad@wizery.com>
+Date: Sun, 4 Sep 2011 18:07:35 +0300
+Subject: [PATCH 05/19] support SDIO Interrupt Extensions
+
+Check for Support Asynchronous Interrupt (SAI), and
+enable set Enable Asynchrounous Interrupt (EAI) if supported.
+
+Signed-off-by: Eliad Peller <eliad@wizery.com>
+---
+ drivers/mmc/core/sdio_irq.c |   18 ++++++++++++++++++
+ include/linux/mmc/sdio.h    |    1 +
+ 2 files changed, 19 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mmc/core/sdio_irq.c b/drivers/mmc/core/sdio_irq.c
+index 03ead02..e05a9c2 100644
+--- a/drivers/mmc/core/sdio_irq.c
++++ b/drivers/mmc/core/sdio_irq.c
+@@ -252,6 +252,24 @@ int sdio_claim_irq(struct sdio_func *func, sdio_irq_handler_t *handler)
+ 	if (ret)
+ 		return ret;
+ 
++	if (func->card->host->caps & MMC_CAP_ASYNC_SDIO_IRQ) {
++		/* read Interrupt Extenstion */
++		ret = mmc_io_rw_direct(func->card, 0, 0,
++				       SDIO_CCCR_IEXx, 0, &reg);
++		if (ret)
++			return ret;
++
++		/* check Support Asynchronous Interrupt (SAI) */
++		if (reg & 0x1) {
++			/* Enable Asynchronous Interrupt */
++			reg |= BIT(1);
++			ret = mmc_io_rw_direct(func->card, 1, 0,
++					       SDIO_CCCR_IEXx, reg, NULL);
++			if (ret)
++				return ret;
++		}
++	}
++
+ 	func->irq_handler = handler;
+ 	ret = sdio_card_irq_get(func->card);
+ 	if (ret)
+diff --git a/include/linux/mmc/sdio.h b/include/linux/mmc/sdio.h
+index c428333..009f79f 100644
+--- a/include/linux/mmc/sdio.h
++++ b/include/linux/mmc/sdio.h
+@@ -91,6 +91,7 @@
+ 
+ #define SDIO_CCCR_IENx		0x04	/* Function/Master Interrupt Enable */
+ #define SDIO_CCCR_INTx		0x05	/* Function Interrupt Pending */
++#define SDIO_CCCR_IEXx		0x16	/* Function Interrupt Extension */
+ 
+ #define SDIO_CCCR_ABORT		0x06	/* function abort/card reset */
+ 
+-- 
+1.7.7.6
+

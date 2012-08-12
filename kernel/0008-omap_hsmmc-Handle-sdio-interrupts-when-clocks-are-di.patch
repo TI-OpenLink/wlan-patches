@@ -1,0 +1,169 @@
+From 35dc9318737a46c666e6dba1cc9c9ec8d42c4518 Mon Sep 17 00:00:00 2001
+From: Ido Yariv <ido@wizery.com>
+Date: Tue, 27 Sep 2011 14:18:01 +0300
+Subject: [PATCH 08/19] omap_hsmmc: Handle sdio interrupts when clocks are
+ disabled *PRELIMINARY*
+
+When the mmc host disables its internal clocks, it can no longer detect
+sdio interrupts on dat1. To continue being able to serve such interrupts,
+dat1 should be remuxed to the relevant gpio and handled as an irq source.
+
+The interrupt handler should be run in process context, as enable_sdio_irq
+might sleep. Thus, a threaded irq is used for this purpose.
+
+Signed-off-by: Ido Yariv <ido@wizery.com>
+Signed-off-by: Eliad Peller <eliad@wizery.com>
+---
+ arch/arm/mach-omap2/hsmmc.c           |    2 +
+ arch/arm/mach-omap2/hsmmc.h           |    3 ++
+ arch/arm/plat-omap/include/plat/mmc.h |    4 +++
+ drivers/mmc/host/omap_hsmmc.c         |   45 +++++++++++++++++++++++++++++++++
+ 4 files changed, 54 insertions(+), 0 deletions(-)
+
+diff --git a/arch/arm/mach-omap2/hsmmc.c b/arch/arm/mach-omap2/hsmmc.c
+index fcf53ec..4b51a08 100644
+--- a/arch/arm/mach-omap2/hsmmc.c
++++ b/arch/arm/mach-omap2/hsmmc.c
+@@ -300,8 +300,10 @@ static int __init omap_hsmmc_pdata_init(struct omap2_hsmmc_info *c,
+ 
+ 	mmc->slots[0].switch_pin = c->gpio_cd;
+ 	mmc->slots[0].gpio_wp = c->gpio_wp;
++	mmc->slots[0].gpio_dat1 = c->gpio_dat1;
+ 
+ 	mmc->slots[0].remux = c->remux;
++	mmc->slots[0].remux_dat1 = c->remux_dat1;
+ 	mmc->slots[0].init_card = c->init_card;
+ 
+ 	if (c->cover_only)
+diff --git a/arch/arm/mach-omap2/hsmmc.h b/arch/arm/mach-omap2/hsmmc.h
+index 2cbe0f9..93838d8 100644
+--- a/arch/arm/mach-omap2/hsmmc.h
++++ b/arch/arm/mach-omap2/hsmmc.h
+@@ -26,6 +26,7 @@ struct omap2_hsmmc_info {
+ 	bool	vcc_aux_disable_is_sleep; /* Regulator off remapped to sleep */
+ 	int	gpio_cd;	/* or -EINVAL */
+ 	int	gpio_wp;	/* or -EINVAL */
++	int	gpio_dat1;	/* or -EINVAL */
+ 	char	*name;		/* or NULL for default */
+ 	struct device *dev;	/* returned: pointer to mmc adapter */
+ 	int	ocr_mask;	/* temporary HACK */
+@@ -34,6 +35,8 @@ struct omap2_hsmmc_info {
+ 	void (*remux)(struct device *dev, int slot, int power_on);
+ 	/* init some special card */
+ 	void (*init_card)(struct mmc_card *card);
++	/* Remux (pad configuration) when enabling/disabling clocks */
++	void (*remux_dat1)(bool clocks_enabled);
+ };
+ 
+ #if defined(CONFIG_MMC_OMAP_HS) || defined(CONFIG_MMC_OMAP_HS_MODULE)
+diff --git a/arch/arm/plat-omap/include/plat/mmc.h b/arch/arm/plat-omap/include/plat/mmc.h
+index b95aabd..41c4702 100644
+--- a/arch/arm/plat-omap/include/plat/mmc.h
++++ b/arch/arm/plat-omap/include/plat/mmc.h
+@@ -114,6 +114,9 @@ struct omap_mmc_platform_data {
+ 		int switch_pin;			/* gpio (card detect) */
+ 		int gpio_wp;			/* gpio (write protect) */
+ 
++		int gpio_dat1;			/* gpio (dat1) */
++		int dat1_irq;			/* irq (dat1) */
++
+ 		int (*set_bus_mode)(struct device *dev, int slot, int bus_mode);
+ 		int (*set_power)(struct device *dev, int slot,
+ 				 int power_on, int vdd);
+@@ -121,6 +124,7 @@ struct omap_mmc_platform_data {
+ 		int (*set_sleep)(struct device *dev, int slot, int sleep,
+ 				 int vdd, int cardsleep);
+ 		void (*remux)(struct device *dev, int slot, int power_on);
++		void (*remux_dat1)(bool clocks_enabled);
+ 		/* Call back before enabling / disabling regulators */
+ 		void (*before_set_reg)(struct device *dev, int slot,
+ 				       int power_on, int vdd);
+diff --git a/drivers/mmc/host/omap_hsmmc.c b/drivers/mmc/host/omap_hsmmc.c
+index bd5f7d3..8af755d 100644
+--- a/drivers/mmc/host/omap_hsmmc.c
++++ b/drivers/mmc/host/omap_hsmmc.c
+@@ -628,8 +628,23 @@ static int omap_hsmmc_gpio_init(struct omap_mmc_platform_data *pdata)
+ 	} else
+ 		pdata->slots[0].gpio_wp = -EINVAL;
+ 
++	if (gpio_is_valid(pdata->slots[0].gpio_dat1)) {
++		pdata->slots[0].dat1_irq =
++				gpio_to_irq(pdata->slots[0].gpio_dat1);
++		ret = gpio_request(pdata->slots[0].gpio_dat1, "mmc_dat1");
++		if (ret)
++			goto err_free_wp;
++		ret = gpio_direction_input(pdata->slots[0].gpio_dat1);
++		if (ret)
++			goto err_free_dat1;
++	} else {
++		pdata->slots[0].dat1_irq = -EINVAL;
++	}
++
+ 	return 0;
+ 
++err_free_dat1:
++	gpio_free(pdata->slots[0].gpio_dat1);
+ err_free_wp:
+ 	gpio_free(pdata->slots[0].gpio_wp);
+ err_free_cd:
+@@ -645,6 +660,8 @@ static void omap_hsmmc_gpio_free(struct omap_mmc_platform_data *pdata)
+ 		gpio_free(pdata->slots[0].gpio_wp);
+ 	if (gpio_is_valid(pdata->slots[0].switch_pin))
+ 		gpio_free(pdata->slots[0].switch_pin);
++	if (gpio_is_valid(pdata->slots[0].gpio_dat1))
++		gpio_free(pdata->slots[0].gpio_dat1);
+ }
+ 
+ /*
+@@ -1325,6 +1342,16 @@ static irqreturn_t omap_hsmmc_irq(int irq, void *dev_id)
+ 	return IRQ_HANDLED;
+ }
+ 
++static irqreturn_t omap_hsmmc_dat1_irq(int irq, void *dev_id)
++{
++	struct omap_hsmmc_host *host = dev_id;
++
++	disable_irq_nosync(mmc_slot(host).dat1_irq);
++	mmc_signal_sdio_irq(host->mmc);
++
++	return IRQ_HANDLED;
++}
++
+ static void set_sd_bus_power(struct omap_hsmmc_host *host)
+ {
+ 	unsigned long i;
+@@ -2315,6 +2342,12 @@ static int omap_hsmmc_enable_simple(struct mmc_host *mmc)
+ 
+ 	pm_runtime_get_sync(host->dev);
+ 
++	if (host->mmc->caps & MMC_CAP_ASYNC_SDIO_IRQ) {
++		free_irq(mmc_slot(host).dat1_irq, host);
++		mmc_slot(host).remux_dat1(true);
++		enable_irq(host->irq);
++	}
++
+ 	dev_dbg(mmc_dev(host->mmc), "enabled\n");
+ 	return 0;
+ }
+@@ -2322,6 +2355,18 @@ static int omap_hsmmc_enable_simple(struct mmc_host *mmc)
+ static int omap_hsmmc_disable_simple(struct mmc_host *mmc, int lazy)
+ {
+ 	struct omap_hsmmc_host *host = mmc_priv(mmc);
++	int ret;
++
++	if (host->mmc->caps & MMC_CAP_ASYNC_SDIO_IRQ) {
++		disable_irq(host->irq);
++		mmc_slot(host).remux_dat1(false);
++		ret = request_threaded_irq(mmc_slot(host).dat1_irq,
++				  NULL, omap_hsmmc_dat1_irq,
++				  IRQF_TRIGGER_LOW | IRQF_ONESHOT,
++				  "sdio_irq", host);
++		if (ret)
++			dev_err(mmc_dev(host->mmc), "Could not request irq");
++	}
+ 
+ 	pm_runtime_put_sync(host->dev);
+ 
+-- 
+1.7.7.6
+

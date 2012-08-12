@@ -1,0 +1,35 @@
+From bfe939fdd75e79f38950dac6c4c9d5857792d2f0 Mon Sep 17 00:00:00 2001
+From: Eliad Peller <eliad@wizery.com>
+Date: Sun, 11 Mar 2012 14:58:34 +0200
+Subject: [PATCH 16/19] PM: fix might_sleep_if in __pm_runtime_idle
+
+commit b1d0d5f ("PM: runtime: add might_sleep to PM runtime functions")
+added might_sleep_if() checks for __pm_runtime_* functions. But while
+__pm_runtime_suspend/resume checked dev->power.irq_safe (which allows
+using these functions in atomic context), __pm_runtime_idle missed
+that check.
+
+[Note that this bug doesn't exist in the upstreamed commit (311aab7
+"PM / Runtime: Add might_sleep() to runtime PM functions")]
+
+Signed-off-by: Eliad Peller <eliad@wizery.com>
+---
+ drivers/base/power/runtime.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/base/power/runtime.c b/drivers/base/power/runtime.c
+index 184cf54..c1cdc29 100644
+--- a/drivers/base/power/runtime.c
++++ b/drivers/base/power/runtime.c
+@@ -746,7 +746,7 @@ int __pm_runtime_idle(struct device *dev, int rpmflags)
+ 	unsigned long flags;
+ 	int retval;
+ 
+-	might_sleep_if(!(rpmflags & RPM_ASYNC));
++	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe);
+ 
+ 	if (rpmflags & RPM_GET_PUT) {
+ 		if (!atomic_dec_and_test(&dev->power.usage_count))
+-- 
+1.7.7.6
+
