@@ -1,0 +1,51 @@
+From 223d973ef4ebd010e5ccdc058720e0cfe3db249b Mon Sep 17 00:00:00 2001
+From: arkady <a-miasnikov@ti.com>
+Date: Wed, 15 Aug 2012 17:22:14 +0300
+Subject: [PATCH] hostapd.conf: setting wlan1 as default interface
+
+Change-Id: Ia0d384be3fb14b0e044a522cabe3adc9cc03876a
+Signed-off-by: arkady <a-miasnikov@ti.com>
+---
+ mac80211/config/hostapd.conf |    8 +++++---
+ 1 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/mac80211/config/hostapd.conf b/mac80211/config/hostapd.conf
+index b566a0b..f2a85da 100644
+--- a/mac80211/config/hostapd.conf
++++ b/mac80211/config/hostapd.conf
+@@ -14,7 +14,7 @@
+ # Unless required by applicable law or agreed to in writing, software
+ # distributed under the License is distributed on an "AS IS" BASIS,
+ # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-# See the License for the specific language governing permissions and
++# See the License for the specific language governing permissions and  
+ # limitations under the License.
+ #
+ 
+@@ -24,7 +24,7 @@ logger_syslog_level=2
+ logger_stdout=-1
+ logger_stdout_level=2
+ dump_file=/data/misc/wifi/hostapd.dump
+-ctrl_interface=wlan0
++ctrl_interface=wlan1
+ hw_mode=g
+ channel=11
+ beacon_int=100
+@@ -36,7 +36,7 @@ ignore_broadcast_ssid=0
+ wpa_group_rekey=0
+ wpa_gmk_rekey=0
+ wpa_ptk_rekey=0
+-interface=wlan0
++interface=wlan1
+ ssid=AndroidAP
+ ieee80211d=1
+ country_code=US
+@@ -103,3 +103,5 @@ model_name=TI_Connectivity_module
+ model_number=wl12xx
+ serial_number=12345
+ device_type=0-00000000-0
++config_methods=virtual_display virtual_push_button keypad
++ 
+-- 
+1.7.9
+
