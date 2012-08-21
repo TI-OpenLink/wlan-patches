@@ -1,0 +1,42 @@
+From f9984483fa5e7ace9f5875133b466bde61c73602 Mon Sep 17 00:00:00 2001
+From: Arik Nemtsov <arik@wizery.com>
+Date: Thu, 16 Aug 2012 15:20:27 +0300
+Subject: [PATCH] WifiStateMachine: ignore auth-fail event during WPS
+ connection
+
+Disregard auth failure events during WPS connection. The EAP sequence
+is retried several times, and there might be failures (especially for wps pin).
+We will get a WPS_XXX event at the end of the sequence anyway.
+
+Without this change, the SupplicantStateTracker class will disable the
+WPS network we are connecting to after 2 failed authentication events.
+Then, even if WPS succeeds, we will never connect to the selected
+network.
+
+Change-Id: I0727c1aa8528c90b997c405c3fdd2bc8e9886f0b
+Signed-off-by: Arik Nemtsov <arik@wizery.com>
+---
+ wifi/java/android/net/wifi/WifiStateMachine.java |    7 +++++++
+ 1 files changed, 7 insertions(+), 0 deletions(-)
+
+diff --git a/wifi/java/android/net/wifi/WifiStateMachine.java b/wifi/java/android/net/wifi/WifiStateMachine.java
+index 7f8f9ce..5c95ee1 100644
+--- a/wifi/java/android/net/wifi/WifiStateMachine.java
++++ b/wifi/java/android/net/wifi/WifiStateMachine.java
+@@ -3540,6 +3540,13 @@ public class WifiStateMachine extends StateMachine {
+                     //We will start getting supplicant state changes once we get
+                     //a WPS success or failure
+                     break;
++                case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
++                    // disregard auth failure events during WPS connection. The
++                    // EAP sequence is retried several times, and there might be
++                    // failures (especially for wps pin). We will get a WPS_XXX
++                    // event at the end of the sequence anyway.
++                    if (DBG) log("Ignore auth failure during WPS connection");
++                    break;
+                 default:
+                     return NOT_HANDLED;
+             }
+-- 
+1.7.9
+
