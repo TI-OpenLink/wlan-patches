@@ -1,0 +1,27 @@
+From c16effd4788ce3ec28df621e7dacfcc2991b5c9b Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Tue, 28 Aug 2012 16:50:47 +0300
+Subject: [PATCH] hostapd.conf: add RX-STBC1 to ht_capab
+
+Change-Id: I198874d2ca18640021cc6bc002251766f16c9e80
+Signed-off-by: Ido Reis <idor@ti.com>
+---
+ mac80211/config/hostapd.conf |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/mac80211/config/hostapd.conf b/mac80211/config/hostapd.conf
+index f2a85da..9dad9b3 100644
+--- a/mac80211/config/hostapd.conf
++++ b/mac80211/config/hostapd.conf
+@@ -95,7 +95,7 @@ eap_server=1
+ disassoc_low_ack=1
+ ap_max_inactivity=10000
+ ieee80211n=1
+-ht_capab=[SHORT-GI-20]
++ht_capab=[SHORT-GI-20][RX-STBC1]
+ # information elements
+ device_name=Blaze
+ manufacturer=TexasInstruments
+-- 
+1.7.9
+
