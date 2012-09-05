@@ -1,28 +1,27 @@
-From 935b6d28205ec2ef61280638b71eaa8d4d17540e Mon Sep 17 00:00:00 2001
+From 7d908eb35f9d4eddfbe1f23e476baeb88c65e927 Mon Sep 17 00:00:00 2001
 From: Ido Reis <idor@ti.com>
-Date: Thu, 9 Aug 2012 10:33:50 +0300
+Date: Wed, 5 Sep 2012 11:38:59 +0300
 Subject: [PATCH] wpa_supplicant: update p2p_conc_mode to 1  in template conf
  file
 
 Signed-off-by: Ido Reis <idor@ti.com>
 ---
- wpa_supplicant/wpa_supplicant_template.conf |    4 ++--
- 1 files changed, 2 insertions(+), 2 deletions(-)
+ wpa_supplicant/wpa_supplicant_template.conf | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/wpa_supplicant/wpa_supplicant_template.conf b/wpa_supplicant/wpa_supplicant_template.conf
-index 8203295..f70dc57 100644
+index 917ade4..e1c5098 100644
 --- a/wpa_supplicant/wpa_supplicant_template.conf
 +++ b/wpa_supplicant/wpa_supplicant_template.conf
-@@ -9,6 +9,6 @@ manufacturer=TI
+@@ -9,7 +9,7 @@ manufacturer=TI
  model_name=Wilink
  model_number=wl18xx
  serial_number=12345
 -p2p_conc_mode=2
 +p2p_conc_mode=1
  driver_param=use_p2p_group_interface=1
--p2p_go_max_inactivity=30
-\ No newline at end of file
-+p2p_go_max_inactivity=30
+ p2p_go_max_inactivity=30
+ p2p_go_ht40=1
 -- 
-1.7.9
+1.7.11.1
 
