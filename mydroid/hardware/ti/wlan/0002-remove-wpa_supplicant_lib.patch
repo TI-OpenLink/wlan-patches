@@ -1,19 +1,19 @@
-From add9425567d5294a97e4f2076edee0aed75e4a9f Mon Sep 17 00:00:00 2001
-From: Arik Nemtsov <arik@wizery.com>
-Date: Sun, 22 Jul 2012 13:54:48 +0300
-Subject: [PATCH] remove wpa_supplicant_lib
+From 81fb4edb1b17f61395b733c5a4e0b0dbb1cb5da3 Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Tue, 11 Sep 2012 11:48:24 +0300
+Subject: [PATCH 2/4] remove wpa_supplicant_lib
 
 the code is now inline in the supplicant
 
-Change-Id: I9a073fd31cd066017a994880b8e249317f7d7257
-Signed-off-by: Arik Nemtsov <arik@wizery.com>
+Change-Id: I63e077f29bf49dbe43c995a26af366fb7a73959f
+Signed-off-by: Ido Reis <idor@ti.com>
 ---
- mac80211/wpa_supplicant_lib/Android.mk           |   73 -
+ mac80211/wpa_supplicant_lib/Android.mk           |   77 -
  mac80211/wpa_supplicant_lib/driver_mac80211.c    | 2179 ----------------------
  mac80211/wpa_supplicant_lib/driver_mac80211_nl.c |  516 -----
  mac80211/wpa_supplicant_lib/driver_nl80211.h     |  196 --
  mac80211/wpa_supplicant_lib/nl80211.h            | 1813 ------------------
- 5 files changed, 4777 deletions(-)
+ 5 files changed, 0 insertions(+), 4781 deletions(-)
  delete mode 100644 mac80211/wpa_supplicant_lib/Android.mk
  delete mode 100644 mac80211/wpa_supplicant_lib/driver_mac80211.c
  delete mode 100644 mac80211/wpa_supplicant_lib/driver_mac80211_nl.c
@@ -22,15 +22,17 @@ Signed-off-by: Arik Nemtsov <arik@wizery.com>
 
 diff --git a/mac80211/wpa_supplicant_lib/Android.mk b/mac80211/wpa_supplicant_lib/Android.mk
 deleted file mode 100644
-index 7fd448e..0000000
+index 7890e2e..0000000
 --- a/mac80211/wpa_supplicant_lib/Android.mk
 +++ /dev/null
-@@ -1,73 +0,0 @@
+@@ -1,77 +0,0 @@
 -LOCAL_PATH := $(call my-dir)
 -
 -ifeq ($(TARGET_SIMULATOR),true)
 -  $(error This makefile must not be included when building the simulator)
 -endif
+-
+-ifneq ($(BOARD_WPA_SUPPLICANT_PRIVATE_LIB),)
 -
 -ifeq ($(WPA_SUPPLICANT_VERSION),VER_0_6_X)
 -    WPA_SUPPL_DIR = external/wpa_supplicant_6/wpa_supplicant
@@ -99,6 +101,8 @@ index 7fd448e..0000000
 -LOCAL_SRC_FILES := $(L_SRC)
 -LOCAL_C_INCLUDES := $(INCLUDES)
 -include $(BUILD_STATIC_LIBRARY)
+-
+-endif
 diff --git a/mac80211/wpa_supplicant_lib/driver_mac80211.c b/mac80211/wpa_supplicant_lib/driver_mac80211.c
 deleted file mode 100644
 index c8d41e0..0000000
@@ -4828,5 +4832,5 @@ index ff749b8..0000000
 -
 -#endif /* __LINUX_NL80211_H */
 -- 
-1.7.9.5
+1.7.9
 
