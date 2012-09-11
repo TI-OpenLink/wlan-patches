@@ -1,7 +1,7 @@
-From c16effd4788ce3ec28df621e7dacfcc2991b5c9b Mon Sep 17 00:00:00 2001
+From 13a4e1a8cd7a903ab3c0a68929a3c8a38ac1ea8a Mon Sep 17 00:00:00 2001
 From: Ido Reis <idor@ti.com>
 Date: Tue, 28 Aug 2012 16:50:47 +0300
-Subject: [PATCH] hostapd.conf: add RX-STBC1 to ht_capab
+Subject: [PATCH 4/4] hostapd.conf: add RX-STBC1 to ht_capab
 
 Change-Id: I198874d2ca18640021cc6bc002251766f16c9e80
 Signed-off-by: Ido Reis <idor@ti.com>
