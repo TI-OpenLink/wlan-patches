@@ -1,0 +1,33 @@
+From 16d1f067a4b7b69c6a151d3526712c609f49da4a Mon Sep 17 00:00:00 2001
+From: Vishal Mahaveer <vishalm@ti.com>
+Date: Wed, 19 Sep 2012 11:56:06 -0500
+Subject: [PATCH] wifi: avoid crash when no phy's are found
+
+Exit gracefully when no phy's are found.
+
+Change-Id: I8c1f57e60bb63b52d8cb086e1a25d8d5b33f03f0
+Signed-off-by: Vishal Mahaveer <vishalm@ti.com>
+---
+ wifi/wifi.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/wifi/wifi.c b/wifi/wifi.c
+index 32d5070..121c9a5 100644
+--- a/wifi/wifi.c
++++ b/wifi/wifi.c
+@@ -586,6 +586,12 @@ int phy_lookup()
+ 
+     n = scandir("/sys/class/ieee80211", &namelist, dir_filter,
+                 (int (*)(const struct dirent**, const struct dirent**))alphasort);
++
++    if (n == -1) {
++        ALOGE("unexpected - found zero phys in /sys/class/ieee80211");
++        return -1;
++    }
++
+     if (n != 1) {
+         ALOGE("unexpected - found %d phys in /sys/class/ieee80211", n);
+         for (i = 0; i < n; i++)
+-- 
+1.7.9
+
