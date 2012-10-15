@@ -1,4 +1,4 @@
-From 8ba4674c3366f0cf931ea6e3a26c21c29c228c8a Mon Sep 17 00:00:00 2001
+From 74b20b7963e107f386ef4ac85ec4f8296ead606c Mon Sep 17 00:00:00 2001
 From: Shahar Levi <shahar_levi@ti.com>
 Date: Thu, 17 May 2012 14:40:14 +0300
 Subject: [PATCH 1/4] remove omap's ti-utils project
