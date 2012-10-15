@@ -1,7 +1,7 @@
-From 8e49c73b7ceca40742f45beb74983a8629334d4a Mon Sep 17 00:00:00 2001
+From d5f4e676076d4f0dc1b2ab040619c9a167a57cb6 Mon Sep 17 00:00:00 2001
 From: arkady <a-miasnikov@ti.com>
 Date: Wed, 15 Aug 2012 17:22:14 +0300
-Subject: [PATCH 3/4] hostapd.conf: setting wlan1 as default interface
+Subject: [PATCH 3/5] hostapd.conf: setting wlan1 as default interface
 
 Change-Id: Ia0d384be3fb14b0e044a522cabe3adc9cc03876a
 Signed-off-by: arkady <a-miasnikov@ti.com>
