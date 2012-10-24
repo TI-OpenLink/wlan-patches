@@ -1,0 +1,27 @@
+From 3cbcaa4a48820089e015d30f7d8948a63fca7f5a Mon Sep 17 00:00:00 2001
+From: Ido Reis <idor@ti.com>
+Date: Wed, 24 Oct 2012 15:36:43 +0200
+Subject: [PATCH] wpa_Supplicant: enable mr/mc by default
+
+---
+ wpa_supplicant/wpa_supplicant_template.conf |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/wpa_supplicant/wpa_supplicant_template.conf b/wpa_supplicant/wpa_supplicant_template.conf
+index ac1a663..1c05496 100644
+--- a/wpa_supplicant/wpa_supplicant_template.conf
++++ b/wpa_supplicant/wpa_supplicant_template.conf
+@@ -9,8 +9,8 @@ manufacturer=TI
+ model_name=Wilink
+ model_number=wl18xx
+ serial_number=12345
+-p2p_conc_mode=2
+-driver_param=use_p2p_group_interface=1
++p2p_conc_mode=0
++driver_param=use_multi_chan_concurrent=1 use_p2p_group_interface=1
+ p2p_go_max_inactivity=30
+ p2p_go_ht40=1
+ p2p_multi_chan=1
+-- 
+1.7.9
+
