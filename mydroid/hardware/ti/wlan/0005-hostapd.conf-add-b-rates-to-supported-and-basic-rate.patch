@@ -1,0 +1,29 @@
+From 97d64bcf108e8467fe8bee4753a0fe56258a0e2e Mon Sep 17 00:00:00 2001
+From: Igal Chernobelsky <igalc@ti.com>
+Date: Wed, 16 Jan 2013 17:40:21 +0200
+Subject: [PATCH] hostapd.conf: add b rates to supported and basic rates
+
+Change-Id: Ic6c19802536ac58920a4b4c13a65b08bcc9e7abd
+Signed-off-by: Igal Chernobelsky <igalc@ti.com>
+---
+ mac80211/config/hostapd.conf |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/mac80211/config/hostapd.conf b/mac80211/config/hostapd.conf
+index f2a85da..4205581 100644
+--- a/mac80211/config/hostapd.conf
++++ b/mac80211/config/hostapd.conf
+@@ -29,8 +29,8 @@ hw_mode=g
+ channel=11
+ beacon_int=100
+ dtim_period=2
+-supported_rates=60 120 240 360 480 540
+-basic_rates=60 120 240
++supported_rates=10 20 55 110 60 120 240 360 480 540
++basic_rates=10 20 55 110 60 120 240
+ preamble=1
+ ignore_broadcast_ssid=0
+ wpa_group_rekey=0
+-- 
+1.7.9
+
