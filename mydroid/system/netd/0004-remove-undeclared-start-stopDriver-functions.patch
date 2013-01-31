@@ -1,0 +1,35 @@
+From c21608405cfe4e58141c7a186c4e82f8da2b36aa Mon Sep 17 00:00:00 2001
+From: Igal Chernobelsky <igalc@ti.com>
+Date: Wed, 9 Jan 2013 21:10:40 +0200
+Subject: [PATCH 4/4] remove undeclared start/stopDriver functions
+
+Change-Id: I78fd8b6ed86d7fb689ea6489afbc11097e033f15
+Signed-off-by: Igal Chernobelsky <igalc@ti.com>
+---
+ SoftapControllerTI.cpp |   10 ----------
+ 1 files changed, 0 insertions(+), 10 deletions(-)
+
+diff --git a/SoftapControllerTI.cpp b/SoftapControllerTI.cpp
+index 9276700..8fff3ee 100644
+--- a/SoftapControllerTI.cpp
++++ b/SoftapControllerTI.cpp
+@@ -51,16 +51,6 @@ SoftapController::SoftapController() {
+ SoftapController::~SoftapController() {
+ }
+ 
+-int SoftapController::startDriver(char *iface) {
+-    ALOGD("softAp startDriver called");
+-    return 0;
+-}
+-
+-int SoftapController::stopDriver(char *iface) {
+-    ALOGD("softAp stopDriver called");
+-    return 0;
+-}
+-
+ int SoftapController::initNl() {
+     int err;
+ 
+-- 
+1.7.9
+
