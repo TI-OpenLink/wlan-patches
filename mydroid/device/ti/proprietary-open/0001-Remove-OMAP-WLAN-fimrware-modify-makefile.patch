@@ -1,4 +1,4 @@
-From 6c879fa35bf4980930e7973dc83c09da1020da56 Mon Sep 17 00:00:00 2001
+From c821aa27deaf753281911b24d1d565808729221f Mon Sep 17 00:00:00 2001
 From: Ido Reis <idor@ti.com>
 Date: Tue, 11 Sep 2012 11:31:34 +0300
 Subject: [PATCH] Remove OMAP WLAN fimrware, modify makefile
@@ -8,15 +8,16 @@ the tgz file content is untouched.
 
 Change-Id: Idf963d03546d51428c2e9d2fd5b1299273e0df87
 Signed-off-by: Ido Reis <idor@ti.com>
+Signed-off-by: Igal Chernobelsky <igalc@ti.com>
 ---
- wl12xx/wlan/wl12xx-wlan-fw-products.mk |   12 ++----------
- 1 files changed, 2 insertions(+), 10 deletions(-)
+ wl12xx/wlan/wl12xx-wlan-fw-products.mk |   13 +------------
+ 1 files changed, 1 insertions(+), 12 deletions(-)
 
 diff --git a/wl12xx/wlan/wl12xx-wlan-fw-products.mk b/wl12xx/wlan/wl12xx-wlan-fw-products.mk
-index 6b7671e..007349d 100644
+index a62f71b..0cec9fd 100644
 --- a/wl12xx/wlan/wl12xx-wlan-fw-products.mk
 +++ b/wl12xx/wlan/wl12xx-wlan-fw-products.mk
-@@ -17,13 +17,5 @@
+@@ -17,15 +17,4 @@
  # WLAN firmware package, which is defined in the top-level Android.mk
  # of the proprietary-open tree
  
@@ -28,10 +29,11 @@ index 6b7671e..007349d 100644
 -        wl127x-fw-4-mr.bin \
 -        wl127x-fw-4-plt.bin \
 -        wl127x-fw-4-sr.bin \
+-	wl18xx-fw-mc.bin \
+-	wl18xx-conf.bin \
 -        wl1271-nvs.bin \
 -        wl1271-nvs_127x.bin
 +WLAN_TGZ :=
-+
 -- 
 1.7.9
 
